@@ -1,0 +1,99 @@
+# MintTab configuration
+# Location: ~/.config/minttab/config
+# Format: key = value, comments start with #
+
+# ---- Switching ----
+
+# switching: switch by app or by window
+#   app    — group windows by app
+#   window — each window shown separately
+switching = app
+
+# ---- UI ----
+
+# ui-style: switcher appearance
+#   icons — icons only
+#   list  — icon + window title
+ui-style = icons
+
+# ui-size: UI element size
+#   small  — small
+#   medium — medium
+#   large  — large
+ui-size = medium
+
+# blur: enable background blur
+blur = true
+
+# mouse: enable mouse selection and hover
+mouse = true
+
+# mouse-switch: release shortcut switches to hovered window
+mouse-switch = true
+
+# ---- Groups ----
+
+# grouping: enable group switching/filtering
+#   when disabled, group-related hotkeys are not registered
+grouping = false
+
+# auto-group: auto-switch to frontmost app's group on open
+auto-group = true
+
+# assign-switch: switch to group after assign hotkey
+assign-switch = false
+
+# switch-group-focus: focus first window when switching groups
+switch-group-focus = false
+
+# show-all-cross-group: Tab/Left/Right cross group rows in show-all
+show-all-cross-group = true
+
+# ---- Display ----
+
+# show-hidden: show Cmd+H hidden apps
+show-hidden = false
+
+# show-windowless: show apps with no windows
+show-windowless = false
+
+# ---- Keybindings ----
+
+# switch-mod: switch key modifier (key is always Tab)
+#   alt  — Alt+Tab
+#   cmd  — Cmd+Tab
+#   ctrl — Ctrl+Tab
+switch-mod = alt
+
+# show-all: show all windows (ignore group filter)
+show-all = alt+`
+
+# ---- Group switch (1–9) ----
+# Format: mod+key. Modifiers: alt, cmd, ctrl, shift.
+# Comment out a line to disable that group's hotkey.
+
+group-switch-1 = ctrl+1
+group-switch-2 = ctrl+2
+group-switch-3 = ctrl+3
+group-switch-4 = ctrl+4
+group-switch-5 = ctrl+5
+group-switch-6 = ctrl+6
+group-switch-7 = ctrl+7
+group-switch-8 = ctrl+8
+group-switch-9 = ctrl+9
+
+# ---- Group assign (assign current app to group) ----
+
+group-assign-1 = ctrl+shift+1
+group-assign-2 = ctrl+shift+2
+group-assign-3 = ctrl+shift+3
+group-assign-4 = ctrl+shift+4
+group-assign-5 = ctrl+shift+5
+group-assign-6 = ctrl+shift+6
+group-assign-7 = ctrl+shift+7
+group-assign-8 = ctrl+shift+8
+group-assign-9 = ctrl+shift+9
+
+# ---- Group navigation (unbound by default) ----
+# next-group = ctrl+right
+# prev-group = ctrl+left
