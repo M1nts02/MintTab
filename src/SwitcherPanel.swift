@@ -543,6 +543,7 @@ private class SwitcherContentView: NSView, NSDraggingSource {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard dragEntryIdx >= 0 else { return false }
         let point = convert(sender.draggingLocation, from: nil)
+        print("[MintTab] drag drop at \(point)")
         // Find which row the drop is on by checking item view frames
         var targetGroup = 0
         for (vi, _) in itemViews.enumerated() {
@@ -552,6 +553,7 @@ private class SwitcherContentView: NSView, NSDraggingSource {
                 for (e, v) in entryToViewIndex where v == vi {
                     // e is entry index in currentEntries
                     // Need group info from outside — pass entry index up
+                    print("[MintTab]   dragIdx=\(dragEntryIdx) targetIdx=\(e)")
                     onDropToGroup?(dragEntryIdx, e)
                     break
                 }
@@ -563,6 +565,22 @@ private class SwitcherContentView: NSView, NSDraggingSource {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Deduplicate with the CGEvent tap / local monitor so a single key press
+        // is handled only once.
+        let keyCode = Int64(event.keyCode)
+        guard markKeyEventHandled(keyCode) else { return }
+
+        let mods = event.modifierFlags.carbonModifiers
+        if let action = directionAction(forCarbonKeyCode: UInt32(keyCode), modifiers: mods) {
+            switch action {
+            case .up: onKeyEvent?("up")
+            case .down: onKeyEvent?("down")
+            case .left: onKeyEvent?("left")
+            case .right: onKeyEvent?("right")
+            }
+            return
+        }
+
         switch Int(event.keyCode) {
         case Int(KeyCode.tab):
             onKeyEvent?(event.modifierFlags.contains(.shift) ? "shiftTab" : "tab")
@@ -570,14 +588,6 @@ private class SwitcherContentView: NSView, NSDraggingSource {
             onKeyEvent?("escape")
         case Int(KeyCode.return):
             onKeyEvent?("enter")
-        case Int(KeyCode.upArrow):
-            onKeyEvent?("up")
-        case Int(KeyCode.downArrow):
-            onKeyEvent?("down")
-        case Int(KeyCode.leftArrow):
-            onKeyEvent?("left")
-        case Int(KeyCode.rightArrow):
-            onKeyEvent?("right")
         default:
             super.keyDown(with: event)
         }

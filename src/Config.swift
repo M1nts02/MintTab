@@ -87,6 +87,30 @@ enum CarbonMod {
     }
 }
 
+extension CGEventFlags {
+    /// Convert CGEventFlags to Carbon modifier mask.
+    var carbonModifiers: UInt32 {
+        var mods: UInt32 = 0
+        if contains(.maskShift) { mods |= CarbonMod.shift }
+        if contains(.maskControl) { mods |= CarbonMod.control }
+        if contains(.maskAlternate) { mods |= CarbonMod.option }
+        if contains(.maskCommand) { mods |= CarbonMod.command }
+        return mods
+    }
+}
+
+extension NSEvent.ModifierFlags {
+    /// Convert NSEvent.ModifierFlags to Carbon modifier mask.
+    var carbonModifiers: UInt32 {
+        var mods: UInt32 = 0
+        if contains(.shift) { mods |= CarbonMod.shift }
+        if contains(.control) { mods |= CarbonMod.control }
+        if contains(.option) { mods |= CarbonMod.option }
+        if contains(.command) { mods |= CarbonMod.command }
+        return mods
+    }
+}
+
 // ============================================================
 // MARK: - Parsed Keybinding
 // ============================================================
@@ -162,7 +186,6 @@ struct MintTabConfig {
     let uiStyle: UIStyle
     let uiSize: UISize
     let blur: Bool
-    let grouping: Bool
     let mouse: Bool
     let mouseSwitch: Bool
     let showHidden: Bool
@@ -172,18 +195,24 @@ struct MintTabConfig {
     let showAllCrossGroup: Bool
     let switchGroupFocus: Bool
     let switchMod: SwitchMod
+    let menuBar: Bool
+    let menuBarIconFormat: String
     let showAllKey: ParsedKeybinding
+    let groupNames: [String]  // [0] = group 1, ..., [8] = group 9
     let groupSwitchKeys: [ParsedKeybinding?]  // [0] = group 1, ..., [8] = group 9
     let groupAssignKeys: [ParsedKeybinding?]  // same indexing
     let nextGroupKey: ParsedKeybinding?
     let prevGroupKey: ParsedKeybinding?
+    let showAllUpKey: ParsedKeybinding?
+    let showAllDownKey: ParsedKeybinding?
+    let showAllLeftKey: ParsedKeybinding?
+    let showAllRightKey: ParsedKeybinding?
 
     static let `default` = MintTabConfig(
         switchingLogic: .app,
         uiStyle: .icons,
         uiSize: .medium,
         blur: true,
-        grouping: false,
         mouse: true,
         mouseSwitch: true,
         showHidden: false,
@@ -193,11 +222,18 @@ struct MintTabConfig {
         showAllCrossGroup: true,
         switchGroupFocus: false,
         switchMod: .alt,
+        menuBar: true,
+        menuBarIconFormat: "{index}",
         showAllKey: ParsedKeybinding(modifiers: CarbonMod.option, keyCode: KeyCode.grave),
+        groupNames: (1...9).map { "Group \($0)" },
         groupSwitchKeys: Array(repeating: nil, count: 9),
         groupAssignKeys: Array(repeating: nil, count: 9),
         nextGroupKey: nil,
-        prevGroupKey: nil
+        prevGroupKey: nil,
+        showAllUpKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.upArrow),
+        showAllDownKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.downArrow),
+        showAllLeftKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.leftArrow),
+        showAllRightKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.rightArrow)
     )
 
     /// Convert SwitchMod to Carbon modifier flags.
@@ -278,7 +314,6 @@ enum ConfigLoader {
         let uiSize = MintTabConfig.UISize(
             rawValue: kv["ui-size"] ?? "") ?? d.uiSize
         let blur = kv["blur"] != "false"  // default true
-        let grouping = kv["grouping"] == "true"
         let mouse = kv["mouse"] != "false"
         let mouseSwitch = kv["mouse-switch"] != "false"
         let showHidden = kv["show-hidden"] == "true"
@@ -289,7 +324,18 @@ enum ConfigLoader {
         let switchGroupFocus = kv["switch-group-focus"] == "true"
         let switchMod = MintTabConfig.SwitchMod(
             rawValue: kv["switch-mod"] ?? "") ?? d.switchMod
+        let menuBar = kv["menu-bar"] != "false"
+        let menuBarIconFormat = kv["menu-bar-icon-format"] ?? d.menuBarIconFormat
         let showAllKey = KeybindingParser.parse(kv["show-all"]) ?? d.showAllKey
+
+        // Group names: group-name-1 through group-name-9
+        var groupNames: [String] = (1...9).map { "Group \($0)" }
+        for i in 1...9 {
+            if let name = kv["group-name-\(i)"] {
+                let trimmed = name.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { groupNames[i - 1] = trimmed }
+            }
+        }
 
         // Group switch keys: group-switch-1 through group-switch-9
         var groupSwitchKeys: [ParsedKeybinding?] = Array(repeating: nil, count: 9)
@@ -305,13 +351,16 @@ enum ConfigLoader {
 
         let nextGroupKey = KeybindingParser.parse(kv["next-group"])
         let prevGroupKey = KeybindingParser.parse(kv["prev-group"])
+        let showAllUpKey = KeybindingParser.parse(kv["show-all-up"]) ?? d.showAllUpKey
+        let showAllDownKey = KeybindingParser.parse(kv["show-all-down"]) ?? d.showAllDownKey
+        let showAllLeftKey = KeybindingParser.parse(kv["show-all-left"]) ?? d.showAllLeftKey
+        let showAllRightKey = KeybindingParser.parse(kv["show-all-right"]) ?? d.showAllRightKey
 
         return MintTabConfig(
             switchingLogic: switchingLogic,
             uiStyle: uiStyle,
             uiSize: uiSize,
             blur: blur,
-            grouping: grouping,
             mouse: mouse,
             mouseSwitch: mouseSwitch,
             showHidden: showHidden,
@@ -321,11 +370,18 @@ enum ConfigLoader {
             showAllCrossGroup: showAllCrossGroup,
             switchGroupFocus: switchGroupFocus,
             switchMod: switchMod,
+            menuBar: menuBar,
+            menuBarIconFormat: menuBarIconFormat,
             showAllKey: showAllKey,
+            groupNames: groupNames,
             groupSwitchKeys: groupSwitchKeys,
             groupAssignKeys: groupAssignKeys,
             nextGroupKey: nextGroupKey,
-            prevGroupKey: prevGroupKey
+            prevGroupKey: prevGroupKey,
+            showAllUpKey: showAllUpKey,
+            showAllDownKey: showAllDownKey,
+            showAllLeftKey: showAllLeftKey,
+            showAllRightKey: showAllRightKey
         )
     }
 
@@ -369,8 +425,22 @@ enum ConfigLoader {
             # Focus first window when switching groups
             switch-group-focus = false
 
-            # Grouping: true to enable group switching/filtering
-            grouping = false
+            # Custom group names (1-9)
+            group-name-1 = Group 1
+            group-name-2 = Group 2
+            group-name-3 = Group 3
+            group-name-4 = Group 4
+            group-name-5 = Group 5
+            group-name-6 = Group 6
+            group-name-7 = Group 7
+            group-name-8 = Group 8
+            group-name-9 = Group 9
+
+            # Show menu bar icon with group indicator
+            menu-bar = true
+
+            # Menu bar icon format: {index} = group number, {name} = group name
+            menu-bar-icon-format = {index}
 
             # Switch modifier: alt, cmd, or ctrl (key is always Tab)
             switch-mod = alt

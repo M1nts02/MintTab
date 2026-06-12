@@ -75,8 +75,15 @@ class WindowsManager {
     static let shared = WindowsManager()
 
     /// The current list of app entries (one per unique app), after
-    /// group filtering and z-order sorting.
+    /// group filtering and recency sorting.
     private(set) var appEntries: [AppEntry] = []
+
+    /// Recency stack of bundle IDs. Index 0 = most recently focused.
+    private var focusStack: [String] = []
+
+    /// Last focus timestamp per window ID. Used in window-based switching mode
+    /// to order windows by most recent switch time.
+    private var windowLastFocusTime: [CGWindowID: Date] = [:]
 
     /// The currently active group. 0 = all apps (no filter).
     var currentGroup: Int = GroupManager.shared.lastUsedGroup {
@@ -95,6 +102,163 @@ class WindowsManager {
 
     /// Show apps with no windows.
     var showWindowless: Bool = false
+
+    // MARK: - Focus Stack
+
+    /// Move bundleID to the front of the recency stack.
+    func moveToFront(_ bundleID: String) {
+        focusStack.removeAll { $0 == bundleID }
+        focusStack.insert(bundleID, at: 0)
+    }
+
+    /// Append a new bundle ID to the end of the stack if not already present.
+    private func appendToStack(_ bundleID: String) {
+        if !focusStack.contains(bundleID) {
+            focusStack.append(bundleID)
+        }
+    }
+
+    private func removeFromStack(_ bundleID: String) {
+        focusStack.removeAll { $0 == bundleID }
+    }
+
+    // MARK: - Window Focus Time (window mode)
+
+    /// Record that a window was just focused.
+    func touchWindowFocus(_ windowID: CGWindowID) {
+        windowLastFocusTime[windowID] = Date()
+    }
+
+    private func removeWindowFocusTime(_ windowID: CGWindowID) {
+        windowLastFocusTime.removeValue(forKey: windowID)
+    }
+
+    /// Find the frontmost visible window ID of the given app, skipping
+    /// invisible / zero-size helper windows.
+    private func activeWindowID(for bundleID: String) -> CGWindowID? {
+        guard let app = NSRunningApplication.runningApplications(
+            withBundleIdentifier: bundleID
+        ).first else { return nil }
+        let pid = app.processIdentifier
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.excludeDesktopElements, .optionOnScreenOnly],
+            kCGNullWindowID
+        ) as? [[CFString: Any]] else { return nil }
+        for dict in windowList {
+            guard let ownerPID = dict[kCGWindowOwnerPID] as? pid_t,
+                  ownerPID == pid,
+                  let layer = dict[kCGWindowLayer] as? Int32, layer == 0,
+                  let windowID = dict[kCGWindowNumber] as? CGWindowID
+            else { continue }
+
+            if let alpha = dict[kCGWindowAlpha] as? Double, alpha <= 0 {
+                continue
+            }
+            if let isOnScreen = dict[kCGWindowIsOnscreen] as? Bool, !isOnScreen {
+                continue
+            }
+            if let boundsDict = dict[kCGWindowBounds] as? [String: Any],
+               let width = boundsDict["Width"] as? Double,
+               let height = boundsDict["Height"] as? Double,
+               width <= 0 || height <= 0 {
+                continue
+            }
+
+            return windowID
+        }
+        return nil
+    }
+
+    /// Reorder entries by most recent focus time. Windows without a recorded
+    /// time are treated as oldest and keep their original relative order.
+    private func reorderWindowsByTime(_ entries: inout [AppEntry]) {
+        let distantPast = Date.distantPast
+        entries.sort {
+            let t0 = windowLastFocusTime[$0.windows.first?.cgWindowId ?? 0] ?? distantPast
+            let t1 = windowLastFocusTime[$1.windows.first?.cgWindowId ?? 0] ?? distantPast
+            return t0 > t1
+        }
+    }
+
+    /// Reorder entries to match focus stack order. New apps go to the end.
+    /// Seeds the stack from z-order on first run.
+    private func reorderByStack(_ entries: inout [AppEntry]) {
+        if focusStack.isEmpty {
+            for e in entries where !focusStack.contains(e.bundleIdentifier) {
+                focusStack.append(e.bundleIdentifier)
+            }
+        }
+        // Group entries by bundle ID (preserving original order within each group)
+        var groups: [String: [AppEntry]] = [:]
+        var groupOrder: [String] = []
+        for e in entries {
+            if groups[e.bundleIdentifier] == nil {
+                groups[e.bundleIdentifier] = []
+                groupOrder.append(e.bundleIdentifier)
+            }
+            groups[e.bundleIdentifier]!.append(e)
+        }
+        // Produce entries in stack order, then append unseen
+        var ordered: [AppEntry] = []
+        for bid in focusStack {
+            if let group = groups[bid] { ordered.append(contentsOf: group) }
+        }
+        for bid in groupOrder where !focusStack.contains(bid) {
+            ordered.append(contentsOf: groups[bid]!)
+            focusStack.append(bid)
+        }
+        entries = ordered
+    }
+
+    // MARK: - Workspace Monitoring
+
+    func startMonitoring() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self, selector: #selector(appLaunched(_:)),
+                       name: NSWorkspace.didLaunchApplicationNotification, object: nil)
+        nc.addObserver(self, selector: #selector(appTerminated(_:)),
+                       name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        nc.addObserver(self, selector: #selector(appActivated(_:)),
+                       name: NSWorkspace.didActivateApplicationNotification, object: nil)
+    }
+
+    @objc private func appLaunched(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication,
+              let bid = app.bundleIdentifier,
+              bid != Bundle.main.bundleIdentifier
+        else { return }
+        appendToStack(bid)
+    }
+
+    @objc private func appTerminated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication,
+              let bid = app.bundleIdentifier
+        else { return }
+        removeFromStack(bid)
+    }
+
+    @objc private func appActivated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication,
+              let bid = app.bundleIdentifier,
+              bid != Bundle.main.bundleIdentifier
+        else { return }
+        moveToFront(bid)
+        if switchingLogic == .window, let windowID = activeWindowID(for: bid) {
+            touchWindowFocus(windowID)
+        }
+        sortAppEntries()
+    }
+
+    private func sortAppEntries() {
+        if switchingLogic == .app {
+            reorderByStack(&appEntries)
+        } else {
+            reorderWindowsByTime(&appEntries)
+        }
+    }
 
     /// Refresh the window list by calling CGWindowListCopyWindowInfo,
     /// grouping by bundle identifier, and applying the group filter.
@@ -127,6 +291,21 @@ class WindowsManager {
                 let windowID = windowDict[kCGWindowNumber] as? CGWindowID
             else { continue }
 
+            // Skip invisible / off-screen / zero-size windows that some apps
+            // (e.g. Helium) report as layer-0 windows.
+            if let alpha = windowDict[kCGWindowAlpha] as? Double, alpha <= 0 {
+                continue
+            }
+            if let isOnScreen = windowDict[kCGWindowIsOnscreen] as? Bool, !isOnScreen {
+                continue
+            }
+            if let boundsDict = windowDict[kCGWindowBounds] as? [String: Any],
+               let width = boundsDict["Width"] as? Double,
+               let height = boundsDict["Height"] as? Double,
+               width <= 0 || height <= 0 {
+                continue
+            }
+
             let title = windowDict[kCGWindowName] as? String
             let runningApp = appsByPID[ownerPID]
             let bundleID = runningApp?.bundleIdentifier ?? "pid.\(ownerPID)"
@@ -156,28 +335,56 @@ class WindowsManager {
             }
         }
 
-        // Convert to AppEntry array, preserving z-order from windowList.
+        // Convert to AppEntry array.
         var entries: [AppEntry]
         if switchingLogic == .window {
-            // Window-based: one entry per window, already in z-order
+            // Window-based: one entry per window, ordered by window recency.
+            // The current active window is kept at index 0; index 1 is the
+            // previously focused window.
             entries = validWindows.map { window in
                 let runningApp = appsByPID[window.ownerPID]
+                let bid = runningApp?.bundleIdentifier ?? "pid.\(window.ownerPID)"
                 return AppEntry(
-                    bundleIdentifier: runningApp?.bundleIdentifier ?? "pid.\(window.ownerPID)",
+                    bundleIdentifier: bid,
                     appName: window.ownerName,
                     pid: window.ownerPID,
                     windows: [window],
                     icon: runningApp?.icon
                 )
             }
-        } else {
-            // App-based: group by bundle ID, sort by topmost window z-order
-            // Build z-position lookup from validWindows order (front-to-back)
-            var zOrder: [String: Int] = [:]
-            for (idx, w) in validWindows.enumerated() {
-                let bid = appsByPID[w.ownerPID]?.bundleIdentifier ?? "pid.\(w.ownerPID)"
-                if zOrder[bid] == nil { zOrder[bid] = idx }
+
+            // Prune timestamps of closed windows.
+            let visibleWindowIDs = Set(entries.compactMap { $0.windows.first?.cgWindowId })
+            for id in windowLastFocusTime.keys where !visibleWindowIDs.contains(id) {
+                windowLastFocusTime.removeValue(forKey: id)
             }
+
+            // Seed timestamps from current z-order on first run so the initial
+            // order is reasonable until real focus events build up history.
+            if windowLastFocusTime.isEmpty {
+                let now = Date()
+                for (offset, e) in entries.enumerated() {
+                    if let id = e.windows.first?.cgWindowId {
+                        windowLastFocusTime[id] = now.addingTimeInterval(-Double(offset))
+                    }
+                }
+            }
+
+            // Make sure the currently active window is treated as most recent.
+            let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            print("[MintTab] refresh(window) frontmostApp=\(frontBid ?? "nil") entries=\(entries.count)")
+            print("[MintTab]   before sort: \(entries.prefix(5).map { "\($0.appName):\($0.windows.first?.cgWindowId ?? 0)=\(self.windowLastFocusTime[$0.windows.first?.cgWindowId ?? 0]?.timeIntervalSince1970 ?? 0)" })")
+            if let frontBid = frontBid,
+               let frontEntry = entries.first(where: { $0.bundleIdentifier == frontBid }),
+               let frontID = frontEntry.windows.first?.cgWindowId {
+                touchWindowFocus(frontID)
+                print("[MintTab]   touched current window \(frontID) (\(frontEntry.appName))")
+            }
+
+            reorderWindowsByTime(&entries)
+            print("[MintTab]   after sort:  \(entries.prefix(5).map { "\($0.appName):\($0.windows.first?.cgWindowId ?? 0)" })")
+        } else {
+            // App-based: build entries, sort by focus stack order
             entries = windowGroups.map { (bundleID, group) in
                 AppEntry(
                     bundleIdentifier: bundleID,
@@ -187,9 +394,7 @@ class WindowsManager {
                     icon: group.icon
                 )
             }
-            entries.sort {
-                (zOrder[$0.bundleIdentifier] ?? Int.max) < (zOrder[$1.bundleIdentifier] ?? Int.max)
-            }
+            reorderByStack(&entries)
         }
 
         // Group filtering
@@ -206,8 +411,10 @@ class WindowsManager {
             }
         }
 
-        // Add hidden/windowless apps if enabled
-        if showHidden || showWindowless {
+        // Add hidden/windowless apps if enabled (app mode only; window mode
+        // shows individual windows, so app-level hidden/windowless entries
+        // don't apply and would destroy the recency ordering).
+        if switchingLogic == .app && (showHidden || showWindowless) {
             let visibleBundleIDs = Set(entries.map { $0.bundleIdentifier })
             for app in runningApps {
                 guard let bid = app.bundleIdentifier,
@@ -233,6 +440,18 @@ class WindowsManager {
         }
 
         appEntries = entries
+    }
+
+    /// Update recency order when an app is activated via the switcher.
+    func recordActivation(_ bundleID: String, windowID: CGWindowID? = nil) {
+        print("[MintTab] recordActivation bundle=\(bundleID) window=\(windowID?.description ?? "nil")")
+        moveToFront(bundleID)
+        if let windowID {
+            touchWindowFocus(windowID)
+            print("[MintTab]   -> touched window \(windowID), time=\(windowLastFocusTime[windowID] ?? Date.distantPast)")
+        }
+        sortAppEntries()
+        print("[MintTab]   -> appEntries order: \(appEntries.prefix(5).map { "\($0.appName):\($0.windows.first?.cgWindowId ?? 0)" })")
     }
 
     /// Cycle to the next non-empty group. Wraps around to 0 (all).
@@ -269,8 +488,9 @@ class WindowsManager {
     }
 
     /// Returns entries organized by group for the "show all" display.
-    /// Section 0 = ungrouped, sections 1-9 = groups.
-    func groupedEntries() -> [(group: Int, label: String, entries: [AppEntry])] {
+    func groupedEntries(groupNames: [String]? = nil) -> [(group: Int, label: String, entries: [AppEntry])] {
+        let names = groupNames ?? (1...9).map { "Group \($0)" }
+
         // Temporarily get all entries without group filter
         let savedGroup = currentGroup
         currentGroup = 0
@@ -290,7 +510,7 @@ class WindowsManager {
                 groupEntries = ungrouped + groupEntries
             }
             if !groupEntries.isEmpty {
-                sections.append((g, "Group \(g)", groupEntries))
+                sections.append((g, names[g - 1], groupEntries))
             }
         }
 

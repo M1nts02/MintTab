@@ -21,6 +21,19 @@ Default config is generated at `~/.config/minttab/config` on first run.
 
 Requires **Accessibility** permission (System Settings → Privacy & Security → Accessibility).
 
+### Run as a service
+
+```bash
+# Start (auto-launches on login)
+brew services start m1nts02/tap/minttab
+
+# Stop
+brew services stop m1nts02/tap/minttab
+
+# Restart
+brew services restart m1nts02/tap/minttab
+```
+
 ## Config
 
 Config file: `~/.config/minttab/config`
@@ -57,6 +70,7 @@ minttab switch-group 1     # Switch to group 1
 minttab assign-group 3     # Assign current app to group 3
 minttab show-all           # Show all windows
 minttab show-panel         # Open switch panel
+minttab reload             # Reload config from disk
 ```
 
 ## License

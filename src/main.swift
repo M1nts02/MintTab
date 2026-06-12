@@ -66,22 +66,122 @@ private var eventTap: CFMachPort?
 /// Local event monitor for key events while panel is shown.
 private var localEventMonitor: Any?
 
+/// Last key event handled by any of the key handlers (CGEvent tap, local
+/// monitor, or the panel's content view). Used to suppress duplicate handling
+/// of the same physical key press.
+private var lastHandledKey: (keyCode: Int64, timestamp: Date) = (0, Date.distantPast)
+private let keyDedupInterval: TimeInterval = 0.05
+
+/// Mark a key event as handled and return whether this handler should process
+/// it (false if it was already handled very recently).
+func markKeyEventHandled(_ keyCode: Int64) -> Bool {
+    let now = Date()
+    if lastHandledKey.keyCode == keyCode,
+       now.timeIntervalSince(lastHandledKey.timestamp) < keyDedupInterval {
+        return false
+    }
+    lastHandledKey = (keyCode, now)
+    return true
+}
+
 // ============================================================
 // MARK: - CGEvent Tap Callback
 // ============================================================
 
 /// File-level closure stored so it can be safely bridged to a C function pointer.
-/// Tracks changes to the modifier flags and posts them to the main queue.
-private let flagsChangedCallback: CGEventTapCallBack = {
+/// Tracks modifier flag changes AND Tab key events for cycling while panel is open.
+private let eventTapCallback: CGEventTapCallBack = {
     (_: CGEventTapProxy, type: CGEventType, event: CGEvent, _: UnsafeMutableRawPointer?)
         -> Unmanaged<CGEvent>? in
-    if type == .flagsChanged {
+    switch type {
+    case .flagsChanged:
         let flags = event.flags
         DispatchQueue.main.async {
             flagsChanged(modifiers: NSEvent.ModifierFlags(rawValue: UInt(flags.rawValue)))
         }
+    case .keyDown:
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let flags = event.flags
+        DispatchQueue.main.async {
+            handleKeyEvent(keyCode: keyCode, flags: flags)
+        }
+    default:
+        break
     }
     return Unmanaged.passUnretained(event)
+}
+
+enum DirectionKeyAction {
+    case up, down, left, right
+}
+
+/// Resolve a key event to a direction action. Always recognizes arrow keys and
+/// macOS Emacs bindings (Ctrl+N/P/F/B); also honors custom show-all-* config keys.
+func directionAction(forCarbonKeyCode keyCode: UInt32, modifiers: UInt32) -> DirectionKeyAction? {
+    // Arrow keys
+    if modifiers == 0 {
+        switch keyCode {
+        case KeyCode.upArrow: return .up
+        case KeyCode.downArrow: return .down
+        case KeyCode.leftArrow: return .left
+        case KeyCode.rightArrow: return .right
+        default: break
+        }
+    }
+
+    // Emacs direction keys
+    if modifiers == CarbonMod.control {
+        switch keyCode {
+        case KeyCode.p: return .up
+        case KeyCode.n: return .down
+        case KeyCode.b: return .left
+        case KeyCode.f: return .right
+        default: break
+        }
+    }
+
+    // Custom config keys
+    if let up = activeConfig.showAllUpKey, up.keyCode == keyCode, up.modifiers == modifiers {
+        return .up
+    }
+    if let down = activeConfig.showAllDownKey, down.keyCode == keyCode, down.modifiers == modifiers {
+        return .down
+    }
+    if let left = activeConfig.showAllLeftKey, left.keyCode == keyCode, left.modifiers == modifiers {
+        return .left
+    }
+    if let right = activeConfig.showAllRightKey, right.keyCode == keyCode, right.modifiers == modifiers {
+        return .right
+    }
+
+    return nil
+}
+
+private func handleKeyEvent(keyCode: Int64, flags: CGEventFlags) {
+    guard panelVisible else { return }
+    guard markKeyEventHandled(keyCode) else { return }
+
+    if let action = directionAction(forCarbonKeyCode: UInt32(keyCode), modifiers: flags.carbonModifiers) {
+        switch action {
+        case .up: cycleRow(forward: false)
+        case .down: cycleRow(forward: true)
+        case .left: cycleSelection(forward: false)
+        case .right: cycleSelection(forward: true)
+        }
+        return
+    }
+
+    switch keyCode {
+    case Int64(KeyCode.tab):
+        let hasShift = flags.contains(.maskShift)
+        cycleSelection(forward: !hasShift)
+    case Int64(KeyCode.escape):
+        dismissPanel(select: false)
+    case Int64(KeyCode.return):
+        dismissPanel(select: true)
+    default:
+        break
+    }
 }
 
 // ============================================================
@@ -168,27 +268,25 @@ private func setupCarbonHotkeys() {
     let sk = activeConfig.showAllKey
     registerHotkey(id: HotkeyID.showAll, keyCode: sk.keyCode, modifiers: sk.modifiers)
 
-    // --- Register group hotkeys (only when grouping enabled) ---
-    if activeConfig.grouping {
-        for i in 0..<9 {
-            if let key = activeConfig.groupSwitchKeys[i] {
-                registerHotkey(
-                    id: HotkeyID.groupSwitchBase + UInt32(i),
-                    keyCode: key.keyCode, modifiers: key.modifiers)
-            }
-            if let key = activeConfig.groupAssignKeys[i] {
-                registerHotkey(
-                    id: HotkeyID.groupAssignBase + UInt32(i),
-                    keyCode: key.keyCode, modifiers: key.modifiers)
-            }
+    // --- Register group hotkeys ---
+    for i in 0..<9 {
+        if let key = activeConfig.groupSwitchKeys[i] {
+            registerHotkey(
+                id: HotkeyID.groupSwitchBase + UInt32(i),
+                keyCode: key.keyCode, modifiers: key.modifiers)
         }
+        if let key = activeConfig.groupAssignKeys[i] {
+            registerHotkey(
+                id: HotkeyID.groupAssignBase + UInt32(i),
+                keyCode: key.keyCode, modifiers: key.modifiers)
+        }
+    }
 
-        if let nk = activeConfig.nextGroupKey {
-            registerHotkey(id: HotkeyID.nextGroup, keyCode: nk.keyCode, modifiers: nk.modifiers)
-        }
-        if let pk = activeConfig.prevGroupKey {
-            registerHotkey(id: HotkeyID.prevGroup, keyCode: pk.keyCode, modifiers: pk.modifiers)
-        }
+    if let nk = activeConfig.nextGroupKey {
+        registerHotkey(id: HotkeyID.nextGroup, keyCode: nk.keyCode, modifiers: nk.modifiers)
+    }
+    if let pk = activeConfig.prevGroupKey {
+        registerHotkey(id: HotkeyID.prevGroup, keyCode: pk.keyCode, modifiers: pk.modifiers)
     }
 }
 
@@ -210,17 +308,19 @@ private func registerHotkey(id: UInt32, keyCode: UInt32, modifiers: UInt32) {
     }
 }
 
-/// Create a CGEvent tap that listens *only* for flagsChanged so we know
-/// when the Option key is released regardless of Tab state.
+/// Create a CGEvent tap that monitors flagsChanged (modifier release) and
+/// keyDown (Tab/Esc/arrows while panel is open). Uses .cghidEventTap for
+/// earliest possible event interception.
 private func setupEventTap() {
     let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+             | CGEventMask(1 << CGEventType.keyDown.rawValue)
 
     eventTap = CGEvent.tapCreate(
-        tap: .cgSessionEventTap,
+        tap: .cghidEventTap,
         place: .headInsertEventTap,
         options: .listenOnly,
         eventsOfInterest: mask,
-        callback: flagsChangedCallback,
+        callback: eventTapCallback,
         userInfo: nil
     )
 
@@ -230,16 +330,82 @@ private func setupEventTap() {
         CGEvent.tapEnable(tap: tap, enable: true)
     } else {
         print(
-            "[MintTab] Warning: could not create event tap. Option-release detection may be unreliable (accessibility permission may be needed)."
+            "[MintTab] Warning: could not create event tap. Key event detection may be unreliable (accessibility permission may be needed)."
         )
     }
 }
 
-/// Local event monitor: fallback for key events when panel is key.
+/// Tear down all registered hotkeys, the event tap, and the local monitor.
+private func teardownInput() {
+    for (_, ref) in hotkeyRefs {
+        if let r = ref { UnregisterEventHotKey(r) }
+    }
+    hotkeyRefs.removeAll()
+
+    if let tap = eventTap {
+        CGEvent.tapEnable(tap: tap, enable: false)
+        eventTap = nil
+    }
+
+    if let mon = localEventMonitor {
+        NSEvent.removeMonitor(mon)
+        localEventMonitor = nil
+    }
+}
+
+/// Reload configuration from disk and re-apply all settings.
+private func reloadConfig() {
+    teardownInput()
+    setNativeCommandTabEnabled(true)  // restore before reload
+
+    activeConfig = ConfigLoader.load()
+    triggerModifierFlag = activeConfig.triggerModifierFlag
+    WindowsManager.shared.switchingLogic = activeConfig.switchingLogic
+    WindowsManager.shared.showHidden = activeConfig.showHidden
+    WindowsManager.shared.showWindowless = activeConfig.showWindowless
+    SwitcherPanel.shared.setBlur(activeConfig.blur)
+    SwitcherPanel.shared.setMouse(activeConfig.mouse)
+
+    MenuBarManager.shared.setup(
+        enabled: activeConfig.menuBar,
+        groupNames: activeConfig.groupNames,
+        iconFormat: activeConfig.menuBarIconFormat)
+
+    if panelVisible {
+        dismissPanel(select: false)
+    }
+
+    WindowsManager.shared.currentGroup = 1
+    MenuBarManager.shared.updateIcon(group: 1)
+
+    if activeConfig.switchMod == .cmd {
+        setNativeCommandTabEnabled(false)
+    }
+
+    setupCarbonHotkeys()
+    setupEventTap()
+    setupLocalEventMonitor()
+
+    print("[MintTab] Configuration reloaded.")
+}
+
+/// Local event monitor: lightweight fallback for when the panel has key focus.
+/// Key events (Tab/arrows) are handled by the CGEvent tap to avoid double-firing.
 private func setupLocalEventMonitor() {
     localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
         guard panelVisible else { return event }
-        handlePanelKey(nil)  // fallback — also try the view's handler
+        // CGEvent tap and the panel's content view handle most keys. This
+        // monitor is a fallback for Esc/Enter, deduplicated with markKeyEventHandled.
+        let keyCode = Int64(event.keyCode)
+        guard markKeyEventHandled(keyCode) else { return event }
+        switch Int(event.keyCode) {
+        case Int(KeyCode.escape):
+            dismissPanel(select: false)
+        case Int(KeyCode.return):
+            dismissPanel(select: true)
+        default:
+            break
+        }
         return event
     }
 }
@@ -293,11 +459,7 @@ private func handleHotkey(id: Int, pressed: Bool) {
     switch uid {
     case HotkeyID.switchTab:
         if pressed {
-            if !panelVisible {
-                showPanel()
-            } else {
-                cycleSelection(forward: true)
-            }
+            if !panelVisible { showPanel() }
         } else {
             if panelVisible {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -310,8 +472,10 @@ private func handleHotkey(id: Int, pressed: Bool) {
         }
 
     case HotkeyID.switchShiftTab:
-        if pressed && panelVisible {
-            cycleSelection(forward: false)
+        if pressed {
+            if !panelVisible {
+                showPanel(backward: true)
+            }
         }
 
     case HotkeyID.showAll:
@@ -324,11 +488,13 @@ private func handleHotkey(id: Int, pressed: Bool) {
     case HotkeyID.nextGroup:
         guard pressed else { break }
         WindowsManager.shared.nextGroup()
+        MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
         if panelVisible { showPanel() }
 
     case HotkeyID.prevGroup:
         guard pressed else { break }
         WindowsManager.shared.previousGroup()
+        MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
         if panelVisible { showPanel() }
 
     case HotkeyID.groupSwitchBase..<HotkeyID.groupSwitchBase + 9:
@@ -362,23 +528,69 @@ private func flagsChanged(modifiers: NSEvent.ModifierFlags) {
 // MARK: - Panel Show / Hide / Cycle
 // ============================================================
 
-private func showPanel() {
-    // Auto-switch to frontmost app's group
-    if activeConfig.autoGroup, activeConfig.grouping {
-        if let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+/// Compute the initial selection for a quick "switch to recent" action.
+/// - App mode: select the entry right after the frontmost app. If the
+///   frontmost app is not visible (e.g. it has no windows), select the first
+///   visible entry instead of skipping it.
+/// - Window mode: entries are in z-order with the current window first, so the
+///   recent window is the one right behind it at index 1.
+private func initialSelectionIndex(
+    entries: [AppEntry], frontmostBundleID: String?
+) -> Int {
+    guard entries.count > 1 else { return 0 }
+
+    if activeConfig.switchingLogic == .window {
+        return 1
+    }
+
+    guard let frontmostBundleID else {
+        return min(1, entries.count - 1)
+    }
+    return entries.first?.bundleIdentifier == frontmostBundleID
+        ? 1
+        : 0
+}
+
+private func showPanel(backward: Bool = false) {
+    let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+
+    // Auto-switch to frontmost app's group.
+    // When assign-switch is also enabled, leave the current group unchanged for
+    // ungrouped apps so they can be assigned to the active group instead of
+    // being forced back to group 1.
+    if activeConfig.autoGroup {
+        if let frontBid = frontBid,
            let group = GroupManager.shared.getGroup(for: frontBid) {
             WindowsManager.shared.currentGroup = group
-        } else {
+        } else if !activeConfig.assignSwitch {
             WindowsManager.shared.currentGroup = 1
         }
+        MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
+    }
+
+    // assign-switch: auto-assign an ungrouped frontmost app to the current group
+    // when the switcher is opened.
+    if activeConfig.assignSwitch, let frontBid = frontBid,
+       GroupManager.shared.getGroup(for: frontBid) == nil {
+        GroupManager.shared.setGroup(WindowsManager.shared.currentGroup, for: frontBid)
+        print("[MintTab] auto-assigned \(frontBid) to group \(WindowsManager.shared.currentGroup)")
+    }
+
+    // Ensure frontmost app is at the top of the focus stack before refresh.
+    if let frontBid = frontBid {
+        WindowsManager.shared.moveToFront(frontBid)
     }
     WindowsManager.shared.refresh()
     let entries = WindowsManager.shared.appEntries
+    print("[MintTab] showPanel entries=\(entries.count) selected=\(initialSelectionIndex(entries: entries, frontmostBundleID: frontBid))")
+    print("[MintTab]   order: \(entries.prefix(5).map { "\($0.appName):\($0.windows.first?.cgWindowId ?? 0)" })")
     guard !entries.isEmpty else { return }
 
     currentEntries = entries
     isShowingAll = false
-    selectedIndex = min(1, entries.count - 1)
+    selectedIndex = backward
+        ? (entries.count - 1)
+        : initialSelectionIndex(entries: entries, frontmostBundleID: frontBid)
     SwitcherPanel.shared.markKbSelection(selectedIndex)
     panelVisible = true
 
@@ -397,8 +609,12 @@ private func showPanel() {
 
 /// Show-all: grouped display with all windows, ignoring current group filter.
 private func showAllPanel() {
+    if let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
+        WindowsManager.shared.moveToFront(frontBid)
+    }
     WindowsManager.shared.refresh()
-    let sections = WindowsManager.shared.groupedEntries()
+    let sections = WindowsManager.shared.groupedEntries(
+        groupNames: activeConfig.groupNames)
     let flatEntries = sections.flatMap { $0.entries }
     guard !flatEntries.isEmpty else { return }
 
@@ -438,7 +654,10 @@ private func showAllPanel() {
         handlePanelKey(action)
     }
     SwitcherPanel.shared.onDropToGroup = { dragIdx, targetIdx in
-        guard dragIdx < currentEntries.count, targetIdx < currentEntries.count else { return }
+        guard dragIdx < currentEntries.count, targetIdx < currentEntries.count else {
+            print("[MintTab] drop indices out of range drag=\(dragIdx) target=\(targetIdx) count=\(currentEntries.count)")
+            return
+        }
         let draggedBundle = currentEntries[dragIdx].bundleIdentifier
         let targetBundle = currentEntries[targetIdx].bundleIdentifier
         var targetGroup = 1
@@ -448,6 +667,7 @@ private func showAllPanel() {
                 break
             }
         }
+        print("[MintTab] assign drag=\(draggedBundle) target=\(targetBundle) group=\(targetGroup)")
         GroupManager.shared.setGroup(targetGroup, for: draggedBundle)
         showAllPanel()
     }
@@ -472,6 +692,7 @@ private func dismissPanel(select: Bool) {
             } else {
                 WindowsManager.shared.currentGroup = 1
             }
+            MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
         }
 
     }
@@ -527,6 +748,12 @@ private func activateApp(_ entry: AppEntry) {
             : [.activateAllWindows, .activateIgnoringOtherApps])
     }
 
+    // Track activation for recency ordering
+    WindowsManager.shared.recordActivation(
+        entry.bundleIdentifier,
+        windowID: isWindowMode ? entry.windows.first?.cgWindowId : nil
+    )
+
     // In window mode, raise the specific window via Accessibility
     if isWindowMode, let targetWindow {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
@@ -570,6 +797,7 @@ private func focusAXWindow(pid: pid_t, title: String?) {
 
 private func switchToGroup(_ group: Int) {
     WindowsManager.shared.currentGroup = group
+    MenuBarManager.shared.updateIcon(group: group)
 
     if panelVisible {
         showPanel()
@@ -587,24 +815,32 @@ private func switchToGroup(_ group: Int) {
 }
 
 private func assignCurrentAppToGroup(_ group: Int) {
-    guard let frontApp = NSWorkspace.shared.frontmostApplication,
-        let bundleID = frontApp.bundleIdentifier
-    else { return }
-
-    // Toggle: if already in this group, remove. Otherwise assign.
-    if GroupManager.shared.getGroup(for: bundleID) == group {
-        GroupManager.shared.setGroup(0, for: bundleID)
-        print("[MintTab] \(frontApp.localizedName ?? bundleID) removed from group \(group)")
+    let bundleID: String
+    if panelVisible, selectedIndex >= 0, selectedIndex < currentEntries.count {
+        // When the switcher is open, assign the currently selected entry's app.
+        bundleID = currentEntries[selectedIndex].bundleIdentifier
     } else {
-        GroupManager.shared.setGroup(group, for: bundleID)
-        if activeConfig.assignSwitch {
-            WindowsManager.shared.currentGroup = group
-        }
-        print("[MintTab] \(frontApp.localizedName ?? bundleID) → Group \(group)")
+        // Otherwise use the frontmost app, but never assign MintTab itself.
+        guard let frontApp = NSWorkspace.shared.frontmostApplication,
+              let bid = frontApp.bundleIdentifier,
+              bid != Bundle.main.bundleIdentifier
+        else { return }
+        bundleID = bid
     }
 
+    GroupManager.shared.setGroup(group, for: bundleID)
+    if activeConfig.assignSwitch {
+        WindowsManager.shared.currentGroup = group
+        MenuBarManager.shared.updateIcon(group: group)
+    }
+    print("[MintTab] \(bundleID) → Group \(group)")
+
     if panelVisible {
-        showPanel()
+        if isShowingAll {
+            showAllPanel()
+        } else {
+            showPanel()
+        }
     }
 }
 
@@ -626,10 +862,32 @@ private class AppDelegate: NSObject, NSApplicationDelegate {
         SwitcherPanel.shared.setBlur(activeConfig.blur)
         SwitcherPanel.shared.setMouse(activeConfig.mouse)
 
+        // If using Cmd as switch modifier, disable native Cmd+Tab
+        if activeConfig.switchMod == .cmd {
+            setNativeCommandTabEnabled(false)
+            nativeHotkeysWereDisabled = true
+            print("[MintTab] Native Cmd+Tab disabled.")
+        }
+
+        WindowsManager.shared.startMonitoring()
+
         setupIPCListener()
         setupCarbonHotkeys()
         setupEventTap()
         setupLocalEventMonitor()
+
+        // Menu bar
+        MenuBarManager.shared.onShowAll = { showAllPanel() }
+        MenuBarManager.shared.onSwitchToGroup = { switchToGroup($0) }
+        MenuBarManager.shared.onMoveToGroup = { assignCurrentAppToGroup($0) }
+        MenuBarManager.shared.onReloadConfig = { reloadConfig() }
+        MenuBarManager.shared.onQuit = { NSApplication.shared.terminate(nil) }
+        MenuBarManager.shared.setup(
+            enabled: activeConfig.menuBar,
+            groupNames: activeConfig.groupNames,
+            iconFormat: activeConfig.menuBarIconFormat)
+        MenuBarManager.shared.updateIcon(
+            group: WindowsManager.shared.currentGroup)
 
         let logicLabel = activeConfig.switchingLogic == .app ? "app" : "window"
         let styleLabel = activeConfig.uiStyle == .icons ? "icons" : "list"
@@ -640,6 +898,12 @@ private class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Restore native Cmd+Tab
+        if nativeHotkeysWereDisabled {
+            setNativeCommandTabEnabled(true)
+            nativeHotkeysWereDisabled = false
+        }
+
         // Unregister all hotkeys
         for (_, ref) in hotkeyRefs {
             if let r = ref { UnregisterEventHotKey(r) }
@@ -697,6 +961,7 @@ private func setupIPCListener() {
         case "switch-group":
             if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
                 WindowsManager.shared.currentGroup = g
+                MenuBarManager.shared.updateIcon(group: g)
                 if activeConfig.switchGroupFocus {
                     WindowsManager.shared.refresh()
                     if let first = WindowsManager.shared.appEntries.first {
@@ -709,14 +974,47 @@ private func setupIPCListener() {
         case "assign-group":
             if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
                 assignCurrentAppToGroup(g)
+                if activeConfig.assignSwitch {
+                    MenuBarManager.shared.updateIcon(group: g)
+                }
             }
         case "show-all":
             if !panelVisible { showAllPanel() }
         case "show-panel":
             if !panelVisible { showPanel() }
+        case "reload":
+            reloadConfig()
         default:
             print("[MintTab] Unknown IPC command: \(action)")
         }
+    }
+}
+
+// ============================================================
+// MARK: - Crash-safe Native Hotkey Restoration
+// ============================================================
+
+/// Ensure native Cmd+Tab is restored even if the app crashes or is force-quit.
+private var nativeHotkeysWereDisabled = false
+
+private func setupCrashSafeRestore() {
+    // atexit runs on normal exit
+    atexit {
+        if nativeHotkeysWereDisabled {
+            setNativeCommandTabEnabled(true)
+            print("[MintTab] Native Cmd+Tab restored (atexit).")
+        }
+    }
+    // SIGTERM / SIGINT (brew services stop, Ctrl+C)
+    signal(SIGTERM) { _ in
+        setNativeCommandTabEnabled(true)
+        print("[MintTab] Native Cmd+Tab restored (SIGTERM).")
+        exit(0)
+    }
+    signal(SIGINT) { _ in
+        setNativeCommandTabEnabled(true)
+        print("[MintTab] Native Cmd+Tab restored (SIGINT).")
+        exit(0)
     }
 }
 
@@ -725,6 +1023,8 @@ private func setupIPCListener() {
 // ============================================================
 
 autoreleasepool {
+    setupCrashSafeRestore()
+
     // If CLI args present and instance running, forward and exit
     if handleCLI() {
         exit(0)
