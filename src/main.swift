@@ -905,33 +905,48 @@ private func assignCurrentAppToGroup(_ group: Int) {
 // MARK: - Permissions
 // ============================================================
 
-/// Request/check the permissions MintTab needs. This should be called early so
-/// the user is prompted before we try to install global input hooks.
+/// Request/check the permissions MintTab needs. macOS only shows one TCC
+/// prompt at a time, so we stagger the requests so all three appear on the
+/// first launch instead of one per launch.
 private func ensurePermissions() {
     // Accessibility is required for Carbon global hotkeys and window activation.
-    let axOptions: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-    let axTrusted = AXIsProcessTrustedWithOptions(axOptions as CFDictionary)
-    print("[MintTab] Accessibility permission: \(axTrusted ? "granted" : "not granted")")
+    requestAccessibilityPermission()
 
     // Input Monitoring is required for the CGEvent tap that detects modifier
     // release and extra key presses while the panel is open.
-    let inputMonitoringGranted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-    print("[MintTab] Input Monitoring permission: \(inputMonitoringGranted ? "granted" : "not granted")")
+    Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { _ in
+        let inputMonitoringGranted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        print("[MintTab] Input Monitoring permission: \(inputMonitoringGranted ? "granted" : "not granted")")
+        if !inputMonitoringGranted {
+            print("[MintTab] Warning: Input Monitoring permission is missing. Will use fallback polling for modifier release.")
+        }
 
-    // Screen Recording lets CGWindowListCopyWindowInfo return window titles.
-    // Without it we fall back to Accessibility-based title reading.
-    let screenCaptureGranted = CGRequestScreenCaptureAccess()
-    print("[MintTab] Screen Recording permission: \(screenCaptureGranted ? "granted" : "not granted")")
+        // Screen Recording lets CGWindowListCopyWindowInfo return window titles.
+        // Without it we fall back to Accessibility-based title reading.
+        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { _ in
+            let screenCaptureGranted = CGRequestScreenCaptureAccess()
+            print("[MintTab] Screen Recording permission: \(screenCaptureGranted ? "granted" : "not granted")")
+            if !screenCaptureGranted {
+                print("[MintTab] Warning: Screen Recording permission is missing. Will use Accessibility API fallback for window titles.")
+            }
+        }
+    }
+}
 
-    if !axTrusted {
-        print("[MintTab] Warning: Accessibility permission is missing. Global hotkeys may not work and window titles may be unavailable.")
+private func requestAccessibilityPermission() {
+    let noPrompt: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false]
+    let alreadyTrusted = AXIsProcessTrustedWithOptions(noPrompt as CFDictionary)
+    if alreadyTrusted {
+        print("[MintTab] Accessibility permission: granted")
+        return
     }
-    if !inputMonitoringGranted {
-        print("[MintTab] Warning: Input Monitoring permission is missing. Will use fallback polling for modifier release.")
-    }
-    if !screenCaptureGranted {
-        print("[MintTab] Warning: Screen Recording permission is missing. Will use Accessibility API fallback for window titles.")
-    }
+
+    // Prompt the user. This returns immediately; the system dialog is shown
+    // asynchronously.
+    let prompt: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+    _ = AXIsProcessTrustedWithOptions(prompt as CFDictionary)
+    print("[MintTab] Accessibility permission: not granted (prompt shown)")
+    print("[MintTab] Warning: Accessibility permission is missing. Global hotkeys may not work and window titles may be unavailable.")
 }
 
 // ============================================================
@@ -1012,33 +1027,74 @@ private class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // ============================================================
-// MARK: - IPC Commands
+// MARK: - CLI / IPC Commands
 // ============================================================
 
 private let ipcNotificationName = NSNotification.Name("com.minttab.command")
 
-/// Parse CLI args and either forward to running instance or start normally.
+/// Execute a CLI command in-process.
+private func executeCLICommand(_ parts: [String]) {
+    guard let action = parts.first else { return }
+    switch action {
+    case "switch-group":
+        if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
+            WindowsManager.shared.currentGroup = g
+            MenuBarManager.shared.updateIcon(group: g)
+            if activeConfig.switchGroupFocus {
+                WindowsManager.shared.refresh()
+                if let first = WindowsManager.shared.appEntries.first {
+                    activateApp(first)
+                }
+            }
+        }
+    case "assign-group":
+        if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
+            assignCurrentAppToGroup(g)
+            if activeConfig.assignSwitch {
+                MenuBarManager.shared.updateIcon(group: g)
+            }
+        }
+    case "show-all":
+        if !panelVisible { showAllPanel() }
+    case "show-panel":
+        if !panelVisible { showPanel() }
+    case "reload":
+        reloadConfig()
+    default:
+        print("[MintTab] Unknown command: \(action)")
+    }
+}
+
+/// Parse CLI args. If a background MintTab is running, forward the command to
+/// it so the menu bar and UI stay in sync. Otherwise execute directly.
+/// If no args are provided, return false so the app starts normally.
 private func handleCLI() -> Bool {
     let args = CommandLine.arguments.dropFirst()
     guard let cmd = args.first else { return false }  // no args, start normally
 
-    // Check if instance already running
+    // Check if a background instance is already running.
     let myPid = ProcessInfo.processInfo.processIdentifier
     let myPath = Bundle.main.executablePath ?? ""
     let running = NSWorkspace.shared.runningApplications.first {
         $0.executableURL?.path == myPath && $0.processIdentifier != myPid
     }
-    if let runningApp = running {
-        // Forward command to running instance
+
+    if running != nil {
+        // Forward to the running daemon so menu bar / panel are updated.
         let payload = args.joined(separator: " ")
         DistributedNotificationCenter.default().postNotificationName(
             ipcNotificationName, object: nil, userInfo: ["cmd": payload],
             deliverImmediately: true)
-        return true  // exit after forwarding
+        return true
     }
 
-    // No running instance, report error and exit
-    print("[MintTab] Error: no running MintTab instance found. Start MintTab first.")
+    // No background instance: execute directly and exit.
+    activeConfig = ConfigLoader.load()
+    WindowsManager.shared.switchingLogic = activeConfig.switchingLogic
+    WindowsManager.shared.showHidden = activeConfig.showHidden
+    WindowsManager.shared.showWindowless = activeConfig.showWindowless
+
+    executeCLICommand(Array(args))
     return true
 }
 
@@ -1048,37 +1104,7 @@ private func setupIPCListener() {
     ) { notification in
         guard let cmdStr = notification.userInfo?["cmd"] as? String else { return }
         let parts = cmdStr.split(separator: " ").map(String.init)
-        guard let action = parts.first else { return }
-        switch action {
-        case "switch-group":
-            if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
-                WindowsManager.shared.currentGroup = g
-                MenuBarManager.shared.updateIcon(group: g)
-                if activeConfig.switchGroupFocus {
-                    WindowsManager.shared.refresh()
-                    if let first = WindowsManager.shared.appEntries.first {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            activateApp(first)
-                        }
-                    }
-                }
-            }
-        case "assign-group":
-            if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
-                assignCurrentAppToGroup(g)
-                if activeConfig.assignSwitch {
-                    MenuBarManager.shared.updateIcon(group: g)
-                }
-            }
-        case "show-all":
-            if !panelVisible { showAllPanel() }
-        case "show-panel":
-            if !panelVisible { showPanel() }
-        case "reload":
-            reloadConfig()
-        default:
-            print("[MintTab] Unknown IPC command: \(action)")
-        }
+        executeCLICommand(parts)
     }
 }
 
