@@ -581,9 +581,8 @@ private class SwitcherContentView: NSView, NSDraggingSource {
             return
         }
 
+        // Tab / Shift+Tab cycling is handled by the Carbon global hotkey.
         switch Int(event.keyCode) {
-        case Int(KeyCode.tab):
-            onKeyEvent?(event.modifierFlags.contains(.shift) ? "shiftTab" : "tab")
         case Int(KeyCode.escape):
             onKeyEvent?("escape")
         case Int(KeyCode.return):

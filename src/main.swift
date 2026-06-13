@@ -1,5 +1,7 @@
 import AppKit
 import Carbon
+import Darwin
+import IOKit
 
 // ============================================================
 // MARK: - Constants
@@ -62,6 +64,13 @@ private var hotkeyReleaseHandler: EventHandlerRef?
 
 /// CGEvent tap ref for flagsChanged monitoring.
 private var eventTap: CFMachPort?
+
+/// Whether the CGEvent tap was created successfully. When false, we fall back
+/// to polling the modifier state to detect when the switch modifier is released.
+private var eventTapAvailable = false
+
+/// Fallback timer for detecting modifier release when the CGEvent tap is unavailable.
+private var modifierPollTimer: Timer?
 
 /// Local event monitor for key events while panel is shown.
 private var localEventMonitor: Any?
@@ -171,10 +180,9 @@ private func handleKeyEvent(keyCode: Int64, flags: CGEventFlags) {
         return
     }
 
+    // Tab / Shift+Tab cycling is handled by the Carbon global hotkey so it
+    // works reliably even when the CGEvent tap does not see repeated key events.
     switch keyCode {
-    case Int64(KeyCode.tab):
-        let hasShift = flags.contains(.maskShift)
-        cycleSelection(forward: !hasShift)
     case Int64(KeyCode.escape):
         dismissPanel(select: false)
     case Int64(KeyCode.return):
@@ -328,9 +336,12 @@ private func setupEventTap() {
         let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        eventTapAvailable = true
+        print("[MintTab] CGEvent tap active.")
     } else {
+        eventTapAvailable = false
         print(
-            "[MintTab] Warning: could not create event tap. Key event detection may be unreliable (accessibility permission may be needed)."
+            "[MintTab] Warning: could not create event tap. Falling back to polling for modifier release (accessibility/input-monitoring permission may be needed)."
         )
     }
 }
@@ -346,6 +357,10 @@ private func teardownInput() {
         CGEvent.tapEnable(tap: tap, enable: false)
         eventTap = nil
     }
+    eventTapAvailable = false
+
+    modifierPollTimer?.invalidate()
+    modifierPollTimer = nil
 
     if let mon = localEventMonitor {
         NSEvent.removeMonitor(mon)
@@ -459,9 +474,16 @@ private func handleHotkey(id: Int, pressed: Bool) {
     switch uid {
     case HotkeyID.switchTab:
         if pressed {
-            if !panelVisible { showPanel() }
-        } else {
             if panelVisible {
+                // Always cycle via the Carbon hotkey; it is more reliable than the
+                // CGEvent tap for repeated Tab presses while the modifier is held.
+                cycleSelection(forward: true)
+                markKeyEventHandled(Int64(KeyCode.tab))
+            } else {
+                showPanel()
+            }
+        } else {
+            if eventTapAvailable && panelVisible {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     guard panelVisible else { return }
                     if !triggerModifierHeld {
@@ -469,11 +491,15 @@ private func handleHotkey(id: Int, pressed: Bool) {
                     }
                 }
             }
+            // When the event tap is unavailable, modifier-release polling handles dismissal.
         }
 
     case HotkeyID.switchShiftTab:
         if pressed {
-            if !panelVisible {
+            if panelVisible {
+                cycleSelection(forward: false)
+                markKeyEventHandled(Int64(KeyCode.tab))
+            } else {
                 showPanel(backward: true)
             }
         }
@@ -522,6 +548,29 @@ private func flagsChanged(modifiers: NSEvent.ModifierFlags) {
         // Trigger modifier was released — dismiss and select.
         dismissPanel(select: true)
     }
+}
+
+/// Fallback for environments where the CGEvent tap cannot be created (e.g.
+/// launchd / brew services without Input Monitoring permission). Poll the
+/// current modifier flags while the panel is open and dismiss when the trigger
+/// modifier is released.
+private func startModifierPoll() {
+    guard !eventTapAvailable else { return }
+    modifierPollTimer?.invalidate()
+    modifierPollTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
+        guard panelVisible else {
+            stopModifierPoll()
+            return
+        }
+        if !NSEvent.modifierFlags.contains(triggerModifierFlag) {
+            dismissPanel(select: true)
+        }
+    }
+}
+
+private func stopModifierPoll() {
+    modifierPollTimer?.invalidate()
+    modifierPollTimer = nil
 }
 
 // ============================================================
@@ -605,6 +654,8 @@ private func showPanel(backward: Bool = false) {
     SwitcherPanel.shared.show(
         with: entries, selectedIndex: selectedIndex,
         style: activeConfig.uiStyle, size: activeConfig.uiSize)
+
+    startModifierPoll()
 }
 
 /// Show-all: grouped display with all windows, ignoring current group filter.
@@ -677,6 +728,8 @@ private func showAllPanel() {
 
 private func dismissPanel(select: Bool) {
     guard panelVisible else { return }
+
+    stopModifierPoll()
 
     let effectiveIndex = activeConfig.mouseSwitch
         ? SwitcherPanel.shared.selectedIndex : selectedIndex
@@ -845,6 +898,31 @@ private func assignCurrentAppToGroup(_ group: Int) {
 }
 
 // ============================================================
+// MARK: - Permissions
+// ============================================================
+
+/// Request/check the permissions MintTab needs. This should be called early so
+/// the user is prompted before we try to install global input hooks.
+private func ensurePermissions() {
+    // Accessibility is required for Carbon global hotkeys and window activation.
+    let axOptions: [String: Any] = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+    let axTrusted = AXIsProcessTrustedWithOptions(axOptions as CFDictionary)
+    print("[MintTab] Accessibility permission: \(axTrusted ? "granted" : "not granted")")
+
+    // Input Monitoring is required for the CGEvent tap that detects modifier
+    // release and extra key presses while the panel is open.
+    let inputMonitoringGranted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+    print("[MintTab] Input Monitoring permission: \(inputMonitoringGranted ? "granted" : "not granted")")
+
+    if !axTrusted {
+        print("[MintTab] Warning: Accessibility permission is missing. Global hotkeys may not work.")
+    }
+    if !inputMonitoringGranted {
+        print("[MintTab] Warning: Input Monitoring permission is missing. Will use fallback polling for modifier release.")
+    }
+}
+
+// ============================================================
 // MARK: - App Delegate
 // ============================================================
 
@@ -870,6 +948,8 @@ private class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         WindowsManager.shared.startMonitoring()
+
+        ensurePermissions()
 
         setupIPCListener()
         setupCarbonHotkeys()
@@ -1023,6 +1103,10 @@ private func setupCrashSafeRestore() {
 // ============================================================
 
 autoreleasepool {
+    // Ensure logs are flushed immediately, including when stdout is redirected
+    // by launchd / brew services.
+    setbuf(stdout, nil)
+
     setupCrashSafeRestore()
 
     // If CLI args present and instance running, forward and exit
