@@ -194,6 +194,7 @@ struct MintTabConfig {
     let autoGroup: Bool
     let showAllCrossGroup: Bool
     let switchGroupFocus: Bool
+    let groupHideOthers: Bool
     let switchMod: SwitchMod
     let menuBar: Bool
     let menuBarIconFormat: String
@@ -217,6 +218,7 @@ struct MintTabConfig {
         autoGroup: true,
         showAllCrossGroup: true,
         switchGroupFocus: false,
+        groupHideOthers: false,
         switchMod: .alt,
         menuBar: true,
         menuBarIconFormat: "{index}",
@@ -314,6 +316,7 @@ enum ConfigLoader {
         let autoGroup = kv["auto-group"] != "false"
         let showAllCrossGroup = kv["show-all-cross-group"] != "false"
         let switchGroupFocus = kv["switch-group-focus"] == "true"
+        let groupHideOthers = kv["group-hide-others"] == "true"
         let switchMod = MintTabConfig.SwitchMod(
             rawValue: kv["switch-mod"] ?? "") ?? d.switchMod
         let menuBar = kv["menu-bar"] != "false"
@@ -357,6 +360,7 @@ enum ConfigLoader {
             autoGroup: autoGroup,
             showAllCrossGroup: showAllCrossGroup,
             switchGroupFocus: switchGroupFocus,
+            groupHideOthers: groupHideOthers,
             switchMod: switchMod,
             menuBar: menuBar,
             menuBarIconFormat: menuBarIconFormat,
@@ -431,6 +435,9 @@ enum ConfigLoader {
 
             # Show all windows (no group filter)
             show-all = alt+`
+
+            # Hide apps from other groups when switching groups
+            # group-hide-others = true
 
             # Group switch hotkeys (one per group, unbound by default)
             # group-switch-1 = ctrl+1

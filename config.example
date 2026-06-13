@@ -58,6 +58,11 @@ mouse-switch = true
 # show-all-cross-group: in show-all mode, Left/Right can move across group rows
 show-all-cross-group = true
 
+# group-hide-others: when switching groups, unhide all apps in the target group
+# and hide apps assigned to other groups. If the target group has no assigned
+# apps, only the group number is switched and no apps are hidden/unhidden.
+# group-hide-others = true
+
 # ============================================================
 # Groups
 # ============================================================

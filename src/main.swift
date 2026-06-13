@@ -478,7 +478,6 @@ private func handleHotkey(id: Int, pressed: Bool) {
                 // Always cycle via the Carbon hotkey; it is more reliable than the
                 // CGEvent tap for repeated Tab presses while the modifier is held.
                 cycleSelection(forward: true)
-                markKeyEventHandled(Int64(KeyCode.tab))
             } else {
                 showPanel()
             }
@@ -500,7 +499,6 @@ private func handleHotkey(id: Int, pressed: Bool) {
         if pressed {
             if panelVisible {
                 cycleSelection(forward: false)
-                markKeyEventHandled(Int64(KeyCode.tab))
             } else {
                 showPanel(backward: true)
             }
@@ -665,7 +663,7 @@ private func showAllPanel() {
     if let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
         WindowsManager.shared.moveToFront(frontBid)
     }
-    WindowsManager.shared.refresh()
+    WindowsManager.shared.refresh(includeHidden: true)
     let sections = WindowsManager.shared.groupedEntries(
         groupNames: activeConfig.groupNames)
     let flatEntries = sections.flatMap { $0.entries }
@@ -856,6 +854,25 @@ private func switchToGroup(_ group: Int) {
     WindowsManager.shared.currentGroup = group
     MenuBarManager.shared.updateIcon(group: group)
 
+    if activeConfig.groupHideOthers {
+        let targetApps = GroupManager.shared.getAppsInGroup(group)
+        guard !targetApps.isEmpty else {
+            // Empty target group: just switch the group, do nothing else.
+            print("[MintTab] Group \(group) (empty)")
+            return
+        }
+
+        // Unhide all apps in the target group.
+        let targetSet = Set(targetApps)
+        for app in NSWorkspace.shared.runningApplications {
+            guard let bid = app.bundleIdentifier, targetSet.contains(bid) else { continue }
+            app.unhide()
+        }
+
+        // Hide apps assigned to other groups.
+        hideAppsNotInGroup(group)
+    }
+
     if panelVisible {
         showPanel()
     }
@@ -869,6 +886,26 @@ private func switchToGroup(_ group: Int) {
     }
 
     print("[MintTab] Group \(group)")
+}
+
+/// Hide running apps assigned to groups other than the target group.
+/// If the target group has no assigned apps, do nothing.
+private func hideAppsNotInGroup(_ group: Int) {
+    guard group > 0 else { return }
+    guard !GroupManager.shared.getAppsInGroup(group).isEmpty else { return }
+
+    let myBundleID = Bundle.main.bundleIdentifier ?? ""
+    for app in NSWorkspace.shared.runningApplications {
+        guard app.activationPolicy == .regular,
+              let bundleID = app.bundleIdentifier,
+              bundleID != myBundleID
+        else { continue }
+
+        if let appGroup = GroupManager.shared.getGroup(for: bundleID),
+           appGroup > 0, appGroup != group {
+            app.hide()
+        }
+    }
 }
 
 private func assignCurrentAppToGroup(_ group: Int) {
@@ -1038,14 +1075,7 @@ private func executeCLICommand(_ parts: [String]) {
     switch action {
     case "switch-group":
         if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
-            WindowsManager.shared.currentGroup = g
-            MenuBarManager.shared.updateIcon(group: g)
-            if activeConfig.switchGroupFocus {
-                WindowsManager.shared.refresh()
-                if let first = WindowsManager.shared.appEntries.first {
-                    activateApp(first)
-                }
-            }
+            switchToGroup(g)
         }
     case "assign-group":
         if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
@@ -1070,7 +1100,7 @@ private func executeCLICommand(_ parts: [String]) {
 /// If no args are provided, return false so the app starts normally.
 private func handleCLI() -> Bool {
     let args = CommandLine.arguments.dropFirst()
-    guard let cmd = args.first else { return false }  // no args, start normally
+    guard args.first != nil else { return false }  // no args, start normally
 
     // Check if a background instance is already running.
     let myPid = ProcessInfo.processInfo.processIdentifier

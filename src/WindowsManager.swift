@@ -333,10 +333,15 @@ class WindowsManager {
 
     /// Refresh the window list by calling CGWindowListCopyWindowInfo,
     /// grouping by bundle identifier, and applying the group filter.
-    func refresh() {
+    /// Pass `includeHidden: true` for show-all mode to also include off-screen
+    /// / minimized windows and to skip the current-group filter.
+    func refresh(includeHidden: Bool = false) {
+        let listOptions: CGWindowListOption = includeHidden
+            ? [.excludeDesktopElements]
+            : [.excludeDesktopElements, .optionOnScreenOnly]
         guard
             let windowList = CGWindowListCopyWindowInfo(
-                [.excludeDesktopElements, .optionOnScreenOnly],
+                listOptions,
                 kCGNullWindowID
             ) as? [[CFString: Any]]
         else {
@@ -370,7 +375,8 @@ class WindowsManager {
             if let alpha = windowDict[kCGWindowAlpha] as? Double, alpha <= 0 {
                 continue
             }
-            if let isOnScreen = windowDict[kCGWindowIsOnscreen] as? Bool, !isOnScreen {
+            if !includeHidden,
+               let isOnScreen = windowDict[kCGWindowIsOnscreen] as? Bool, !isOnScreen {
                 continue
             }
             let cgBounds: CGRect
@@ -487,8 +493,8 @@ class WindowsManager {
             reorderByStack(&entries)
         }
 
-        // Group filtering
-        if currentGroup > 0 {
+        // Group filtering (skip in show-all mode)
+        if !includeHidden, currentGroup > 0 {
             let groupBundleIDs = Set(GroupManager.shared.getAppsInGroup(currentGroup))
             if currentGroup == 1 {
                 // Group 1 includes ungrouped apps

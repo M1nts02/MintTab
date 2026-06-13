@@ -79,6 +79,11 @@ See [config.example](config.example) for all available options. Copy it to `~/.c
 | Next group | Unbound by default |
 | Previous group | Unbound by default |
 
+### Notes
+
+- `show-all` displays **all** windows, including minimized/hidden ones.
+- When `group-hide-others = true`, switching to a group will **unhide all apps in that group** and hide apps assigned to other groups. If the target group has no assigned apps, only the active group number is changed and no apps are hidden/unhidden.
+
 ### CLI
 
 ```bash
