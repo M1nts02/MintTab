@@ -203,10 +203,6 @@ struct MintTabConfig {
     let groupAssignKeys: [ParsedKeybinding?]  // same indexing
     let nextGroupKey: ParsedKeybinding?
     let prevGroupKey: ParsedKeybinding?
-    let showAllUpKey: ParsedKeybinding?
-    let showAllDownKey: ParsedKeybinding?
-    let showAllLeftKey: ParsedKeybinding?
-    let showAllRightKey: ParsedKeybinding?
 
     static let `default` = MintTabConfig(
         switchingLogic: .app,
@@ -229,11 +225,7 @@ struct MintTabConfig {
         groupSwitchKeys: Array(repeating: nil, count: 9),
         groupAssignKeys: Array(repeating: nil, count: 9),
         nextGroupKey: nil,
-        prevGroupKey: nil,
-        showAllUpKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.upArrow),
-        showAllDownKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.downArrow),
-        showAllLeftKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.leftArrow),
-        showAllRightKey: ParsedKeybinding(modifiers: 0, keyCode: KeyCode.rightArrow)
+        prevGroupKey: nil
     )
 
     /// Convert SwitchMod to Carbon modifier flags.
@@ -351,10 +343,6 @@ enum ConfigLoader {
 
         let nextGroupKey = KeybindingParser.parse(kv["next-group"])
         let prevGroupKey = KeybindingParser.parse(kv["prev-group"])
-        let showAllUpKey = KeybindingParser.parse(kv["show-all-up"]) ?? d.showAllUpKey
-        let showAllDownKey = KeybindingParser.parse(kv["show-all-down"]) ?? d.showAllDownKey
-        let showAllLeftKey = KeybindingParser.parse(kv["show-all-left"]) ?? d.showAllLeftKey
-        let showAllRightKey = KeybindingParser.parse(kv["show-all-right"]) ?? d.showAllRightKey
 
         return MintTabConfig(
             switchingLogic: switchingLogic,
@@ -377,11 +365,7 @@ enum ConfigLoader {
             groupSwitchKeys: groupSwitchKeys,
             groupAssignKeys: groupAssignKeys,
             nextGroupKey: nextGroupKey,
-            prevGroupKey: prevGroupKey,
-            showAllUpKey: showAllUpKey,
-            showAllDownKey: showAllDownKey,
-            showAllLeftKey: showAllLeftKey,
-            showAllRightKey: showAllRightKey
+            prevGroupKey: prevGroupKey
         )
     }
 

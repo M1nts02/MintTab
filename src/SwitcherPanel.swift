@@ -211,6 +211,7 @@ private class SwitcherContentView: NSView, NSDraggingSource {
     private var entryToViewIndex: [Int: Int] = [:]
     var style: MintTabConfig.UIStyle = .icons
     var lv: LayoutValues = Layout.values(for: .medium)
+    var isShowingAll: Bool = false
     var selectedEntryIndex: Int = 0 {
         didSet { updateSelection() }
     }
@@ -571,7 +572,7 @@ private class SwitcherContentView: NSView, NSDraggingSource {
         guard markKeyEventHandled(keyCode) else { return }
 
         let mods = event.modifierFlags.carbonModifiers
-        if let action = directionAction(forCarbonKeyCode: UInt32(keyCode), modifiers: mods) {
+        if let action = directionAction(forCarbonKeyCode: UInt32(keyCode), modifiers: mods, isShowingAll: isShowingAll) {
             switch action {
             case .up: onKeyEvent?("up")
             case .down: onKeyEvent?("down")
@@ -581,7 +582,6 @@ private class SwitcherContentView: NSView, NSDraggingSource {
             return
         }
 
-        // Tab / Shift+Tab cycling is handled by the Carbon global hotkey.
         switch Int(event.keyCode) {
         case Int(KeyCode.escape):
             onKeyEvent?("escape")
@@ -685,6 +685,7 @@ class SwitcherPanel: NSPanel {
         let L = Layout.values(for: size)
         switcherContentView.lv = L
         switcherContentView.style = style
+        switcherContentView.isShowingAll = false
         switcherContentView.update(with: entries)
         switcherContentView.selectedEntryIndex = selectedIndex
 
@@ -718,6 +719,7 @@ class SwitcherPanel: NSPanel {
         let L = Layout.values(for: size)
         switcherContentView.lv = L
         switcherContentView.style = .icons
+        switcherContentView.isShowingAll = true
         switcherContentView.updateGrouped(sections: sections)
         switcherContentView.selectedEntryIndex = selectedIndex
 

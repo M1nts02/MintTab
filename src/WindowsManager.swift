@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 // ============================================================
 // MARK: - Data Models
@@ -169,6 +170,76 @@ class WindowsManager {
         return nil
     }
 
+    // MARK: - Accessibility-based window title fallback
+
+    /// Describes an Accessibility API window for title matching.
+    private struct AXWindowInfo {
+        let title: String
+        let bounds: CGRect
+    }
+
+    /// Try to obtain window titles via the Accessibility API. CGWindowList often
+    /// returns empty kCGWindowName for background agents (e.g. brew services) that
+    /// do not have Screen Recording permission, but Accessibility can still read
+    /// window titles if it is granted.
+    private func fetchAXWindowInfos(forPID pid: pid_t) -> [AXWindowInfo] {
+        let app = AXUIElementCreateApplication(pid)
+        var value: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+        guard err == .success else { return [] }
+
+        guard let windows = value as? [AXUIElement] else { return [] }
+        var infos: [AXWindowInfo] = []
+        infos.reserveCapacity(windows.count)
+
+        for window in windows {
+            var titleValue: CFTypeRef?
+            var title = ""
+            if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue) == .success {
+                if let t = titleValue as? String { title = t }
+            }
+
+            var bounds = CGRect.null
+            var posValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue) == .success {
+                var point = CGPoint.zero
+                if let pv = posValue,
+                   AXValueGetValue(pv as! AXValue, .cgPoint, &point) {
+                    bounds.origin = point
+                }
+            }
+
+            var sizeValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success {
+                var size = CGSize.zero
+                if let sv = sizeValue,
+                   AXValueGetValue(sv as! AXValue, .cgSize, &size) {
+                    bounds.size = size
+                }
+            }
+
+            if !title.isEmpty {
+                infos.append(AXWindowInfo(title: title, bounds: bounds))
+            }
+        }
+        return infos
+    }
+
+    private func axTitleMatching(
+        cgBounds: CGRect,
+        axInfos: [AXWindowInfo],
+        tolerance: CGFloat = 2
+    ) -> String? {
+        for info in axInfos {
+            let closeOrigin = abs(info.bounds.origin.x - cgBounds.origin.x) < tolerance
+                && abs(info.bounds.origin.y - cgBounds.origin.y) < tolerance
+            let closeSize = abs(info.bounds.size.width - cgBounds.size.width) < tolerance
+                && abs(info.bounds.size.height - cgBounds.size.height) < tolerance
+            if closeOrigin && closeSize { return info.title }
+        }
+        return nil
+    }
+
     /// Reorder entries by most recent focus time. Windows without a recorded
     /// time are treated as oldest and keep their original relative order.
     private func reorderWindowsByTime(_ entries: inout [AppEntry]) {
@@ -284,6 +355,9 @@ class WindowsManager {
             [String: (name: String, pid: pid_t, windows: [AppWindow], icon: NSImage?)] = [:]
         var validWindows: [AppWindow] = []
 
+        // Cache Accessibility window titles per PID so we only query each app once.
+        var axTitleCache: [pid_t: [AXWindowInfo]] = [:]
+
         for windowDict in windowList {
             guard let layer = windowDict[kCGWindowLayer] as? Int32, layer == 0,
                 let ownerPID = windowDict[kCGWindowOwnerPID] as? pid_t,
@@ -299,14 +373,30 @@ class WindowsManager {
             if let isOnScreen = windowDict[kCGWindowIsOnscreen] as? Bool, !isOnScreen {
                 continue
             }
+            let cgBounds: CGRect
             if let boundsDict = windowDict[kCGWindowBounds] as? [String: Any],
+               let x = boundsDict["X"] as? Double,
+               let y = boundsDict["Y"] as? Double,
                let width = boundsDict["Width"] as? Double,
-               let height = boundsDict["Height"] as? Double,
-               width <= 0 || height <= 0 {
+               let height = boundsDict["Height"] as? Double {
+                if width <= 0 || height <= 0 { continue }
+                cgBounds = CGRect(x: x, y: y, width: width, height: height)
+            } else {
                 continue
             }
 
-            let title = windowDict[kCGWindowName] as? String
+            var title = windowDict[kCGWindowName] as? String
+            if title == nil || title?.isEmpty == true {
+                var axInfos = axTitleCache[ownerPID]
+                if axInfos == nil {
+                    axInfos = fetchAXWindowInfos(forPID: ownerPID)
+                    axTitleCache[ownerPID] = axInfos
+                }
+                if let axTitle = axTitleMatching(cgBounds: cgBounds, axInfos: axInfos ?? []) {
+                    title = axTitle
+                }
+            }
+
             let runningApp = appsByPID[ownerPID]
             let bundleID = runningApp?.bundleIdentifier ?? "pid.\(ownerPID)"
 

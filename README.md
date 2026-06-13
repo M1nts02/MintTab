@@ -19,7 +19,11 @@ brew install m1nts02/tap/minttab
 
 Default config is generated at `~/.config/minttab/config` on first run.
 
-Requires **Accessibility** permission (System Settings → Privacy & Security → Accessibility).
+Requires these permissions in System Settings → Privacy & Security:
+
+- **Accessibility** — global hotkeys and window activation.
+- **Input Monitoring** — detecting modifier release; if denied, MintTab falls back to polling.
+- **Screen Recording** — reading window titles via `CGWindowList`; if denied, MintTab falls back to Accessibility API for titles.
 
 ### Run as a service
 
@@ -46,13 +50,25 @@ See [config.example](config.example) for all available options. Copy it to `~/.c
 
 | Action | Default shortcut |
 |--------|-----------------|
-| Switch windows | Alt+Tab |
-| Reverse switch | Alt+Shift+Tab |
-| Show all (grouped view) | Alt+` |
+| Switch windows | `switch-mod` + Tab |
+| Reverse switch | `switch-mod` + Shift + Tab |
+| Show all (grouped view) | Alt + ` |
 | Confirm selection | Enter |
 | Cancel | Esc |
-| Navigate up/down | ↑↓ (switch group rows in show-all) |
-| Navigate left/right | ←→ |
+
+**Switcher navigation**
+
+| Key | Action |
+|-----|--------|
+| ← → ↑ ↓ | Move selection |
+| `switch-mod` + h / j / k / l | Move left / down / up / right (Vim) |
+
+**Show-all navigation**
+
+| Key | Action |
+|-----|--------|
+| ← → ↑ ↓ | Move selection |
+| h / j / k / l | Move left / down / up / right (Vim) |
 
 ### Groups
 

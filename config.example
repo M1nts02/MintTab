@@ -55,7 +55,7 @@ mouse = true
 # mouse-switch: release the switch hotkey on a hovered item to select it
 mouse-switch = true
 
-# show-all-cross-group: in show-all mode, Tab/Left/Right can move across group rows
+# show-all-cross-group: in show-all mode, Left/Right can move across group rows
 show-all-cross-group = true
 
 # ============================================================
@@ -120,10 +120,6 @@ group-assign-9 = ctrl+shift+9
 # next-group = ctrl+right
 # prev-group = ctrl+left
 
-# ---- Show-all direction keys ----
-# Arrow keys and macOS Emacs bindings (Ctrl+N/P/F/B) are always available.
-# These options add additional custom bindings.
-# show-all-up = ctrl+k
-# show-all-down = ctrl+j
-# show-all-left = ctrl+h
-# show-all-right = ctrl+l
+# ---- Direction keys ----
+# Switcher panel: arrow keys and switch-modifier + h/j/k/l (Vim).
+# Show-all panel: arrow keys and h/j/k/l (Vim).

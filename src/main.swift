@@ -124,11 +124,14 @@ enum DirectionKeyAction {
     case up, down, left, right
 }
 
-/// Resolve a key event to a direction action. Always recognizes arrow keys and
-/// macOS Emacs bindings (Ctrl+N/P/F/B); also honors custom show-all-* config keys.
-func directionAction(forCarbonKeyCode keyCode: UInt32, modifiers: UInt32) -> DirectionKeyAction? {
-    // Arrow keys
-    if modifiers == 0 {
+/// Resolve a key event to a direction action.
+/// - Switcher panel: arrow keys and switch-modifier + Vim keys (h/j/k/l).
+/// - Show-all panel: arrow keys, Ctrl+Emacs keys (n/p/f/b), and custom show-all-* keys.
+func directionAction(forCarbonKeyCode keyCode: UInt32, modifiers: UInt32, isShowingAll: Bool = false) -> DirectionKeyAction? {
+    // Arrow keys work everywhere without modifiers, and in the switcher panel
+    // they also work while holding the switch modifier (since the user is
+    // already keeping that modifier held).
+    if modifiers == 0 || (!isShowingAll && modifiers == activeConfig.switchCarbonMod) {
         switch keyCode {
         case KeyCode.upArrow: return .up
         case KeyCode.downArrow: return .down
@@ -138,29 +141,28 @@ func directionAction(forCarbonKeyCode keyCode: UInt32, modifiers: UInt32) -> Dir
         }
     }
 
-    // Emacs direction keys
-    if modifiers == CarbonMod.control {
-        switch keyCode {
-        case KeyCode.p: return .up
-        case KeyCode.n: return .down
-        case KeyCode.b: return .left
-        case KeyCode.f: return .right
-        default: break
+    if isShowingAll {
+        // Show-all panel: plain Vim direction keys.
+        if modifiers == 0 {
+            switch keyCode {
+            case KeyCode.h: return .left
+            case KeyCode.j: return .down
+            case KeyCode.k: return .up
+            case KeyCode.l: return .right
+            default: break
+            }
         }
-    }
-
-    // Custom config keys
-    if let up = activeConfig.showAllUpKey, up.keyCode == keyCode, up.modifiers == modifiers {
-        return .up
-    }
-    if let down = activeConfig.showAllDownKey, down.keyCode == keyCode, down.modifiers == modifiers {
-        return .down
-    }
-    if let left = activeConfig.showAllLeftKey, left.keyCode == keyCode, left.modifiers == modifiers {
-        return .left
-    }
-    if let right = activeConfig.showAllRightKey, right.keyCode == keyCode, right.modifiers == modifiers {
-        return .right
+    } else {
+        // Switcher panel: Vim direction keys while holding the switch modifier.
+        if modifiers == activeConfig.switchCarbonMod {
+            switch keyCode {
+            case KeyCode.h: return .left
+            case KeyCode.j: return .down
+            case KeyCode.k: return .up
+            case KeyCode.l: return .right
+            default: break
+            }
+        }
     }
 
     return nil
@@ -170,7 +172,7 @@ private func handleKeyEvent(keyCode: Int64, flags: CGEventFlags) {
     guard panelVisible else { return }
     guard markKeyEventHandled(keyCode) else { return }
 
-    if let action = directionAction(forCarbonKeyCode: UInt32(keyCode), modifiers: flags.carbonModifiers) {
+    if let action = directionAction(forCarbonKeyCode: UInt32(keyCode), modifiers: flags.carbonModifiers, isShowingAll: isShowingAll) {
         switch action {
         case .up: cycleRow(forward: false)
         case .down: cycleRow(forward: true)
@@ -429,8 +431,6 @@ private func handlePanelKey(_ action: String?) {
     guard panelVisible else { return }
     if let action {
         switch action {
-        case "tab":     cycleSelection(forward: true)
-        case "shiftTab": cycleSelection(forward: false)
         case "escape":  dismissPanel(select: false)
         case "enter":   dismissPanel(select: true)
         case "up":      cycleRow(forward: false)
@@ -483,15 +483,17 @@ private func handleHotkey(id: Int, pressed: Bool) {
                 showPanel()
             }
         } else {
-            if eventTapAvailable && panelVisible {
+            // Safety net: if the CGEvent tap missed the modifier release or the
+            // polling fallback is not active, check the real modifier state after
+            // the Tab key is released and dismiss if the trigger modifier is up.
+            if panelVisible {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     guard panelVisible else { return }
-                    if !triggerModifierHeld {
+                    if !NSEvent.modifierFlags.contains(triggerModifierFlag) {
                         dismissPanel(select: true)
                     }
                 }
             }
-            // When the event tap is unavailable, modifier-release polling handles dismissal.
         }
 
     case HotkeyID.switchShiftTab:
@@ -724,6 +726,8 @@ private func showAllPanel() {
     }
     SwitcherPanel.shared.showGrouped(
         sections: sections, selectedIndex: selectedIndex, size: activeConfig.uiSize)
+
+    startModifierPoll()
 }
 
 private func dismissPanel(select: Bool) {
@@ -914,11 +918,19 @@ private func ensurePermissions() {
     let inputMonitoringGranted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
     print("[MintTab] Input Monitoring permission: \(inputMonitoringGranted ? "granted" : "not granted")")
 
+    // Screen Recording lets CGWindowListCopyWindowInfo return window titles.
+    // Without it we fall back to Accessibility-based title reading.
+    let screenCaptureGranted = CGRequestScreenCaptureAccess()
+    print("[MintTab] Screen Recording permission: \(screenCaptureGranted ? "granted" : "not granted")")
+
     if !axTrusted {
-        print("[MintTab] Warning: Accessibility permission is missing. Global hotkeys may not work.")
+        print("[MintTab] Warning: Accessibility permission is missing. Global hotkeys may not work and window titles may be unavailable.")
     }
     if !inputMonitoringGranted {
         print("[MintTab] Warning: Input Monitoring permission is missing. Will use fallback polling for modifier release.")
+    }
+    if !screenCaptureGranted {
+        print("[MintTab] Warning: Screen Recording permission is missing. Will use Accessibility API fallback for window titles.")
     }
 }
 
