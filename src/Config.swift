@@ -177,19 +177,16 @@ enum KeybindingParser {
 // ============================================================
 
 struct MintTabConfig {
-    enum SwitchingLogic: String { case app, window }
     enum UIStyle: String { case icons, list }
     enum UISize: String { case small, medium, large }
     enum SwitchMod: String { case alt, cmd, ctrl }
 
-    let switchingLogic: SwitchingLogic
     let uiStyle: UIStyle
     let uiSize: UISize
     let blur: Bool
     let mouse: Bool
     let mouseSwitch: Bool
     let showHidden: Bool
-    let showWindowless: Bool
     let assignSwitch: Bool
     let autoGroup: Bool
     let showAllCrossGroup: Bool
@@ -202,18 +199,14 @@ struct MintTabConfig {
     let groupNames: [String]  // [0] = group 1, ..., [8] = group 9
     let groupSwitchKeys: [ParsedKeybinding?]  // [0] = group 1, ..., [8] = group 9
     let groupAssignKeys: [ParsedKeybinding?]  // same indexing
-    let nextGroupKey: ParsedKeybinding?
-    let prevGroupKey: ParsedKeybinding?
 
     static let `default` = MintTabConfig(
-        switchingLogic: .app,
         uiStyle: .icons,
         uiSize: .medium,
         blur: true,
         mouse: true,
         mouseSwitch: true,
         showHidden: false,
-        showWindowless: false,
         assignSwitch: false,
         autoGroup: true,
         showAllCrossGroup: true,
@@ -225,9 +218,7 @@ struct MintTabConfig {
         showAllKey: ParsedKeybinding(modifiers: CarbonMod.option, keyCode: KeyCode.grave),
         groupNames: (1...9).map { "Group \($0)" },
         groupSwitchKeys: Array(repeating: nil, count: 9),
-        groupAssignKeys: Array(repeating: nil, count: 9),
-        nextGroupKey: nil,
-        prevGroupKey: nil
+        groupAssignKeys: Array(repeating: nil, count: 9)
     )
 
     /// Convert SwitchMod to Carbon modifier flags.
@@ -301,8 +292,6 @@ enum ConfigLoader {
         let kv = ConfigParser.parse(content)
         let d = MintTabConfig.default
 
-        let switchingLogic = MintTabConfig.SwitchingLogic(
-            rawValue: kv["switching"] ?? "") ?? d.switchingLogic
         let uiStyle = MintTabConfig.UIStyle(
             rawValue: kv["ui-style"] ?? "") ?? d.uiStyle
         let uiSize = MintTabConfig.UISize(
@@ -311,7 +300,6 @@ enum ConfigLoader {
         let mouse = kv["mouse"] != "false"
         let mouseSwitch = kv["mouse-switch"] != "false"
         let showHidden = kv["show-hidden"] == "true"
-        let showWindowless = kv["show-windowless"] == "true"
         let assignSwitch = kv["assign-switch"] == "true"
         let autoGroup = kv["auto-group"] != "false"
         let showAllCrossGroup = kv["show-all-cross-group"] != "false"
@@ -344,18 +332,13 @@ enum ConfigLoader {
             groupAssignKeys[i - 1] = KeybindingParser.parse(kv["group-assign-\(i)"])
         }
 
-        let nextGroupKey = KeybindingParser.parse(kv["next-group"])
-        let prevGroupKey = KeybindingParser.parse(kv["prev-group"])
-
         return MintTabConfig(
-            switchingLogic: switchingLogic,
             uiStyle: uiStyle,
             uiSize: uiSize,
             blur: blur,
             mouse: mouse,
             mouseSwitch: mouseSwitch,
             showHidden: showHidden,
-            showWindowless: showWindowless,
             assignSwitch: assignSwitch,
             autoGroup: autoGroup,
             showAllCrossGroup: showAllCrossGroup,
@@ -367,18 +350,13 @@ enum ConfigLoader {
             showAllKey: showAllKey,
             groupNames: groupNames,
             groupSwitchKeys: groupSwitchKeys,
-            groupAssignKeys: groupAssignKeys,
-            nextGroupKey: nextGroupKey,
-            prevGroupKey: prevGroupKey
+            groupAssignKeys: groupAssignKeys
         )
     }
 
     private static func writeDefaultConfig(at url: URL, directory dir: URL) {
         let defaultContent = """
             # MintTab configuration (~/.config/minttab/config)
-
-            # Switching mode: app (by application) or window (by window)
-            switching = app
 
             # UI style: icons (icons only) or list (icon + window title)
             ui-style = icons
@@ -395,11 +373,8 @@ enum ConfigLoader {
             # Mouse switch: release shortcut switches to hovered window
             mouse-switch = true
 
-            # Show Cmd+H hidden apps
+            # Show windows from Cmd+H hidden apps
             show-hidden = false
-
-            # Show apps with no windows
-            show-windowless = false
 
             # Switch to group after assign hotkey
             assign-switch = false
@@ -461,9 +436,6 @@ enum ConfigLoader {
             # group-assign-8 = ctrl+shift+8
             # group-assign-9 = ctrl+shift+9
 
-            # Next/previous group hotkeys (unbound by default)
-            # next-group = ctrl+right
-            # prev-group = ctrl+left
             """
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? defaultContent.write(to: url, atomically: true, encoding: .utf8)

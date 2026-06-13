@@ -17,10 +17,18 @@ private enum HotkeyID {
     static let switchTab: UInt32 = 1
     static let switchShiftTab: UInt32 = 2
     static let showAll: UInt32 = 3
-    static let nextGroup: UInt32 = 4
-    static let prevGroup: UInt32 = 5
     static let groupSwitchBase: UInt32 = 10   // 10–18 → group 1–9
     static let groupAssignBase: UInt32 = 20   // 20–28 → assign 1–9
+}
+
+/// Returns the bundle identifier of the frontmost app, or a stable CLI
+/// identifier for command-line GUI apps that have no bundle ID.
+private func frontmostBundleID() -> String? {
+    guard let app = NSWorkspace.shared.frontmostApplication,
+          app.processIdentifier != ProcessInfo.processInfo.processIdentifier
+    else { return nil }
+    return app.bundleIdentifier
+        ?? cliBundleIdentifier(forProcessName: app.localizedName ?? "")
 }
 
 // ============================================================
@@ -291,13 +299,6 @@ private func setupCarbonHotkeys() {
                 keyCode: key.keyCode, modifiers: key.modifiers)
         }
     }
-
-    if let nk = activeConfig.nextGroupKey {
-        registerHotkey(id: HotkeyID.nextGroup, keyCode: nk.keyCode, modifiers: nk.modifiers)
-    }
-    if let pk = activeConfig.prevGroupKey {
-        registerHotkey(id: HotkeyID.prevGroup, keyCode: pk.keyCode, modifiers: pk.modifiers)
-    }
 }
 
 /// Wrapper around Carbon's RegisterEventHotKey.
@@ -377,9 +378,7 @@ private func reloadConfig() {
 
     activeConfig = ConfigLoader.load()
     triggerModifierFlag = activeConfig.triggerModifierFlag
-    WindowsManager.shared.switchingLogic = activeConfig.switchingLogic
     WindowsManager.shared.showHidden = activeConfig.showHidden
-    WindowsManager.shared.showWindowless = activeConfig.showWindowless
     SwitcherPanel.shared.setBlur(activeConfig.blur)
     SwitcherPanel.shared.setMouse(activeConfig.mouse)
 
@@ -511,18 +510,6 @@ private func handleHotkey(id: Int, pressed: Bool) {
         }
         showAllPanel()
 
-    case HotkeyID.nextGroup:
-        guard pressed else { break }
-        WindowsManager.shared.nextGroup()
-        MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
-        if panelVisible { showPanel() }
-
-    case HotkeyID.prevGroup:
-        guard pressed else { break }
-        WindowsManager.shared.previousGroup()
-        MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
-        if panelVisible { showPanel() }
-
     case HotkeyID.groupSwitchBase..<HotkeyID.groupSwitchBase + 9:
         guard pressed else { break }
         let group = Int(uid - HotkeyID.groupSwitchBase) + 1  // 1–9
@@ -578,30 +565,15 @@ private func stopModifierPoll() {
 // ============================================================
 
 /// Compute the initial selection for a quick "switch to recent" action.
-/// - App mode: select the entry right after the frontmost app. If the
-///   frontmost app is not visible (e.g. it has no windows), select the first
-///   visible entry instead of skipping it.
-/// - Window mode: entries are in z-order with the current window first, so the
-///   recent window is the one right behind it at index 1.
-private func initialSelectionIndex(
-    entries: [AppEntry], frontmostBundleID: String?
-) -> Int {
+/// Entries are ordered with the current window first, so the recent window is
+/// the one right behind it at index 1.
+private func initialSelectionIndex(entries: [AppEntry]) -> Int {
     guard entries.count > 1 else { return 0 }
-
-    if activeConfig.switchingLogic == .window {
-        return 1
-    }
-
-    guard let frontmostBundleID else {
-        return min(1, entries.count - 1)
-    }
-    return entries.first?.bundleIdentifier == frontmostBundleID
-        ? 1
-        : 0
+    return 1
 }
 
 private func showPanel(backward: Bool = false) {
-    let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    let frontBid = frontmostBundleID()
 
     // Auto-switch to frontmost app's group.
     // When assign-switch is also enabled, leave the current group unchanged for
@@ -625,13 +597,9 @@ private func showPanel(backward: Bool = false) {
         print("[MintTab] auto-assigned \(frontBid) to group \(WindowsManager.shared.currentGroup)")
     }
 
-    // Ensure frontmost app is at the top of the focus stack before refresh.
-    if let frontBid = frontBid {
-        WindowsManager.shared.moveToFront(frontBid)
-    }
     WindowsManager.shared.refresh()
     let entries = WindowsManager.shared.appEntries
-    print("[MintTab] showPanel entries=\(entries.count) selected=\(initialSelectionIndex(entries: entries, frontmostBundleID: frontBid))")
+    print("[MintTab] showPanel entries=\(entries.count) selected=\(initialSelectionIndex(entries: entries))")
     print("[MintTab]   order: \(entries.prefix(5).map { "\($0.appName):\($0.windows.first?.cgWindowId ?? 0)" })")
     guard !entries.isEmpty else { return }
 
@@ -639,7 +607,7 @@ private func showPanel(backward: Bool = false) {
     isShowingAll = false
     selectedIndex = backward
         ? (entries.count - 1)
-        : initialSelectionIndex(entries: entries, frontmostBundleID: frontBid)
+        : initialSelectionIndex(entries: entries)
     SwitcherPanel.shared.markKbSelection(selectedIndex)
     panelVisible = true
 
@@ -660,12 +628,8 @@ private func showPanel(backward: Bool = false) {
 
 /// Show-all: grouped display with all windows, ignoring current group filter.
 private func showAllPanel() {
-    if let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier {
-        WindowsManager.shared.moveToFront(frontBid)
-    }
-    WindowsManager.shared.refresh(includeHidden: true)
     let sections = WindowsManager.shared.groupedEntries(
-        groupNames: activeConfig.groupNames)
+        includeHidden: true, groupNames: activeConfig.groupNames)
     let flatEntries = sections.flatMap { $0.entries }
     guard !flatEntries.isEmpty else { return }
 
@@ -680,7 +644,7 @@ private func showAllPanel() {
     currentEntries = flatEntries
     isShowingAll = true
     // Select focused window with windows; else first in current group; else first overall
-    let frontBid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    let frontBid = frontmostBundleID()
     let curGroup = WindowsManager.shared.currentGroup
     if let frontIdx = flatEntries.firstIndex(where: { $0.bundleIdentifier == frontBid && !$0.windows.isEmpty }) {
         selectedIndex = frontIdx
@@ -786,31 +750,26 @@ private func cycleSelection(forward: Bool) {
 
 private func activateApp(_ entry: AppEntry) {
     let targetWindow = entry.windows.first
-    let isWindowMode = activeConfig.switchingLogic == .window
 
     // Activate the app
     if let app = NSRunningApplication.runningApplications(
         withBundleIdentifier: entry.bundleIdentifier
     ).first {
-        app.activate(options: isWindowMode
-            ? [.activateIgnoringOtherApps]
-            : [.activateAllWindows, .activateIgnoringOtherApps])
+        app.activate(options: [.activateIgnoringOtherApps])
     } else if let app = NSWorkspace.shared.runningApplications.first(
         where: { $0.processIdentifier == entry.pid }
     ) {
-        app.activate(options: isWindowMode
-            ? [.activateIgnoringOtherApps]
-            : [.activateAllWindows, .activateIgnoringOtherApps])
+        app.activate(options: [.activateIgnoringOtherApps])
     }
 
     // Track activation for recency ordering
     WindowsManager.shared.recordActivation(
         entry.bundleIdentifier,
-        windowID: isWindowMode ? entry.windows.first?.cgWindowId : nil
+        windowID: entry.windows.first?.cgWindowId
     )
 
-    // In window mode, raise the specific window via Accessibility
-    if isWindowMode, let targetWindow {
+    // Raise the specific window via Accessibility
+    if let targetWindow {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
             focusAXWindow(pid: entry.pid, title: targetWindow.title)
         }
@@ -864,8 +823,12 @@ private func switchToGroup(_ group: Int) {
 
         // Unhide all apps in the target group.
         let targetSet = Set(targetApps)
+        let ourPID = ProcessInfo.processInfo.processIdentifier
         for app in NSWorkspace.shared.runningApplications {
-            guard let bid = app.bundleIdentifier, targetSet.contains(bid) else { continue }
+            guard app.processIdentifier != ourPID else { continue }
+            let bid = app.bundleIdentifier
+                ?? cliBundleIdentifier(forProcessName: app.localizedName ?? "")
+            guard targetSet.contains(bid) else { continue }
             app.unhide()
         }
 
@@ -894,16 +857,55 @@ private func hideAppsNotInGroup(_ group: Int) {
     guard group > 0 else { return }
     guard !GroupManager.shared.getAppsInGroup(group).isEmpty else { return }
 
-    let myBundleID = Bundle.main.bundleIdentifier ?? ""
+    let ourPID = ProcessInfo.processInfo.processIdentifier
     for app in NSWorkspace.shared.runningApplications {
-        guard app.activationPolicy == .regular,
-              let bundleID = app.bundleIdentifier,
-              bundleID != myBundleID
+        guard app.processIdentifier != ourPID,
+              app.activationPolicy == .regular
         else { continue }
 
+        let bundleID = app.bundleIdentifier
+            ?? cliBundleIdentifier(forProcessName: app.localizedName ?? "")
         if let appGroup = GroupManager.shared.getGroup(for: bundleID),
            appGroup > 0, appGroup != group {
             app.hide()
+        }
+    }
+}
+
+/// Assign a running or CLI app to a group by name or explicit identifier.
+/// Examples:
+///   assignAppToGroup(1, identifier: "mpv")              -> cli.mpv
+///   assignAppToGroup(1, identifier: "com.apple.Safari") -> com.apple.Safari
+///   assignAppToGroup(1, identifier: "cli.mpv")          -> cli.mpv
+private func assignAppToGroup(_ group: Int, identifier: String) {
+    let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+
+    let bundleID: String
+    if trimmed.contains(".") {
+        // Explicit bundle ID or CLI identifier (e.g. cli.mpv).
+        bundleID = trimmed
+    } else if let app = NSWorkspace.shared.runningApplications.first(where: {
+        $0.localizedName == trimmed || $0.executableURL?.lastPathComponent == trimmed
+    }) {
+        bundleID = app.bundleIdentifier
+            ?? cliBundleIdentifier(forProcessName: app.localizedName ?? trimmed)
+    } else {
+        bundleID = cliBundleIdentifier(forProcessName: trimmed)
+    }
+
+    GroupManager.shared.setGroup(group, for: bundleID)
+    if activeConfig.assignSwitch {
+        WindowsManager.shared.currentGroup = group
+        MenuBarManager.shared.updateIcon(group: group)
+    }
+    print("[MintTab] \(bundleID) → Group \(group)")
+
+    if panelVisible {
+        if isShowingAll {
+            showAllPanel()
+        } else {
+            showPanel()
         }
     }
 }
@@ -916,10 +918,10 @@ private func assignCurrentAppToGroup(_ group: Int) {
     } else {
         // Otherwise use the frontmost app, but never assign MintTab itself.
         guard let frontApp = NSWorkspace.shared.frontmostApplication,
-              let bid = frontApp.bundleIdentifier,
-              bid != Bundle.main.bundleIdentifier
+              frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier
         else { return }
-        bundleID = bid
+        bundleID = frontApp.bundleIdentifier
+            ?? cliBundleIdentifier(forProcessName: frontApp.localizedName ?? "")
     }
 
     GroupManager.shared.setGroup(group, for: bundleID)
@@ -995,9 +997,7 @@ private class AppDelegate: NSObject, NSApplicationDelegate {
         // Load config and wire subsystems
         activeConfig = ConfigLoader.load()
         triggerModifierFlag = activeConfig.triggerModifierFlag
-        WindowsManager.shared.switchingLogic = activeConfig.switchingLogic
         WindowsManager.shared.showHidden = activeConfig.showHidden
-        WindowsManager.shared.showWindowless = activeConfig.showWindowless
 
         // Create the panel early so it's ready.
         _ = SwitcherPanel.shared
@@ -1033,11 +1033,10 @@ private class AppDelegate: NSObject, NSApplicationDelegate {
         MenuBarManager.shared.updateIcon(
             group: WindowsManager.shared.currentGroup)
 
-        let logicLabel = activeConfig.switchingLogic == .app ? "app" : "window"
         let styleLabel = activeConfig.uiStyle == .icons ? "icons" : "list"
         let switchMod = activeConfig.switchMod.rawValue
         print(
-            "MintTab ready.  Mode: \(logicLabel)  |  Style: \(styleLabel)  |  Switch: \(switchMod)+tab  |  Config: ~/.config/minttab/config"
+            "MintTab ready.  Style: \(styleLabel)  |  Switch: \(switchMod)+tab  |  Config: ~/.config/minttab/config"
         )
     }
 
@@ -1078,11 +1077,17 @@ private func executeCLICommand(_ parts: [String]) {
             switchToGroup(g)
         }
     case "assign-group":
-        if let g = parts.dropFirst().first.flatMap(Int.init), (1...9).contains(g) {
+        let args = Array(parts.dropFirst())
+        guard args.count >= 1,
+              let g = Int(args[0]), (1...9).contains(g)
+        else { return }
+        if args.count >= 2 {
+            assignAppToGroup(g, identifier: args[1])
+        } else {
             assignCurrentAppToGroup(g)
-            if activeConfig.assignSwitch {
-                MenuBarManager.shared.updateIcon(group: g)
-            }
+        }
+        if activeConfig.assignSwitch {
+            MenuBarManager.shared.updateIcon(group: g)
         }
     case "show-all":
         if !panelVisible { showAllPanel() }
@@ -1120,9 +1125,7 @@ private func handleCLI() -> Bool {
 
     // No background instance: execute directly and exit.
     activeConfig = ConfigLoader.load()
-    WindowsManager.shared.switchingLogic = activeConfig.switchingLogic
     WindowsManager.shared.showHidden = activeConfig.showHidden
-    WindowsManager.shared.showWindowless = activeConfig.showWindowless
 
     executeCLICommand(Array(args))
     return true
@@ -1130,11 +1133,13 @@ private func handleCLI() -> Bool {
 
 private func setupIPCListener() {
     DistributedNotificationCenter.default().addObserver(
-        forName: ipcNotificationName, object: nil, queue: .main
+        forName: ipcNotificationName, object: nil, queue: nil
     ) { notification in
         guard let cmdStr = notification.userInfo?["cmd"] as? String else { return }
         let parts = cmdStr.split(separator: " ").map(String.init)
-        executeCLICommand(parts)
+        DispatchQueue.main.async {
+            executeCLICommand(parts)
+        }
     }
 }
 
@@ -1145,25 +1150,35 @@ private func setupIPCListener() {
 /// Ensure native Cmd+Tab is restored even if the app crashes or is force-quit.
 private var nativeHotkeysWereDisabled = false
 
+@_cdecl("minttab_restore_native_hotkeys")
+public func minttabRestoreNativeHotkeys() {
+    if nativeHotkeysWereDisabled {
+        setNativeCommandTabEnabled(true)
+        print("[MintTab] Native Cmd+Tab restored (atexit).")
+    }
+}
+
+@_cdecl("minttab_sigterm_handler")
+public func minttabSigTermHandler(_ sig: Int32) {
+    setNativeCommandTabEnabled(true)
+    print("[MintTab] Native Cmd+Tab restored (SIGTERM).")
+    exit(0)
+}
+
+@_cdecl("minttab_sigint_handler")
+public func minttabSigIntHandler(_ sig: Int32) {
+    setNativeCommandTabEnabled(true)
+    print("[MintTab] Native Cmd+Tab restored (SIGINT).")
+    exit(0)
+}
+
+/// Installs atexit / signal handlers via a C helper so the function pointers
+/// are passed directly from C, avoiding Swift/C closure interop issues.
+@_silgen_name("minttab_setup_signal_handlers")
+private func minttabSetupSignalHandlers()
+
 private func setupCrashSafeRestore() {
-    // atexit runs on normal exit
-    atexit {
-        if nativeHotkeysWereDisabled {
-            setNativeCommandTabEnabled(true)
-            print("[MintTab] Native Cmd+Tab restored (atexit).")
-        }
-    }
-    // SIGTERM / SIGINT (brew services stop, Ctrl+C)
-    signal(SIGTERM) { _ in
-        setNativeCommandTabEnabled(true)
-        print("[MintTab] Native Cmd+Tab restored (SIGTERM).")
-        exit(0)
-    }
-    signal(SIGINT) { _ in
-        setNativeCommandTabEnabled(true)
-        print("[MintTab] Native Cmd+Tab restored (SIGINT).")
-        exit(0)
-    }
+    minttabSetupSignalHandlers()
 }
 
 // ============================================================
@@ -1177,7 +1192,6 @@ autoreleasepool {
 
     setupCrashSafeRestore()
 
-    // If CLI args present and instance running, forward and exit
     if handleCLI() {
         exit(0)
     }

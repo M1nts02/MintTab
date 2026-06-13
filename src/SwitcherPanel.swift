@@ -266,7 +266,7 @@ private class SwitcherContentView: NSView, NSDraggingSource {
     }
 
     /// Grouped display: each section gets a label row + icon row.
-    func updateGrouped(sections: [(group: Int, label: String, entries: [AppEntry])]) {
+    func updateGrouped(sections: [AppGroupSection]) {
         // Build flat list of entry→view, with group labels inserted
         itemViews.forEach { $0.removeFromSuperview() }
         itemViews.removeAll()
@@ -407,7 +407,7 @@ private class SwitcherContentView: NSView, NSDraggingSource {
     }
 
     /// Layout for grouped (show all) mode: vertical stack of rows.
-    func layoutGrouped(sections: [(group: Int, label: String, entries: [AppEntry])]) {
+    func layoutGrouped(sections: [AppGroupSection]) {
         let L = lv
         // Build section view starts
         var sectionViewStart: [(Int, Int)] = []
@@ -714,7 +714,7 @@ class SwitcherPanel: NSPanel {
     }
 
     /// Grouped display: sections with labels (show-all mode, icons only).
-    func showGrouped(sections: [(group: Int, label: String, entries: [AppEntry])], selectedIndex: Int,
+    func showGrouped(sections: [AppGroupSection], selectedIndex: Int,
                      size: MintTabConfig.UISize = .medium) {
         let L = Layout.values(for: size)
         switcherContentView.lv = L

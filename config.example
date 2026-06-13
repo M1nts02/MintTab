@@ -6,11 +6,6 @@
 # Core
 # ============================================================
 
-# switching: switch by app or by window
-#   app    — group windows by app (macOS native Cmd+Tab style)
-#   window — each window shown separately
-switching = window
-
 # switch-mod: modifier for the main switch hotkey (key is always Tab)
 #   alt  — Alt+Tab
 #   cmd  — Cmd+Tab
@@ -27,11 +22,8 @@ assign-switch = true
 # switch-group-focus: focus the first window when switching groups via hotkey
 switch-group-focus = true
 
-# show-hidden: include Cmd+H hidden apps in the switcher (app mode only)
+# show-hidden: include windows from Cmd+H hidden apps in the switcher
 show-hidden = true
-
-# show-windowless: include apps with no open windows in the switcher (app mode only)
-show-windowless = false
 
 # ============================================================
 # UI
@@ -120,7 +112,3 @@ group-assign-6 = ctrl+shift+6
 group-assign-7 = ctrl+shift+7
 group-assign-8 = ctrl+shift+8
 group-assign-9 = ctrl+shift+9
-
-# ---- Group navigation (unbound by default) ----
-# next-group = ctrl+right
-# prev-group = ctrl+left

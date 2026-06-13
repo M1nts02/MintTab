@@ -10,7 +10,7 @@ target("minttab")
     set_kind("binary")
 
     -- add files
-    add_files("src/*.swift")
+    add_files("src/*.swift", "src/*.c")
 
     -- add frameworks for macOS
     add_frameworks("AppKit", "Carbon")
