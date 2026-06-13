@@ -119,7 +119,3 @@ group-assign-9 = ctrl+shift+9
 # ---- Group navigation (unbound by default) ----
 # next-group = ctrl+right
 # prev-group = ctrl+left
-
-# ---- Direction keys ----
-# Switcher panel: arrow keys and switch-modifier + h/j/k/l (Vim).
-# Show-all panel: arrow keys and h/j/k/l (Vim).
