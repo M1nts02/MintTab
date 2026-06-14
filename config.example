@@ -16,8 +16,12 @@ switch-mod = alt
 auto-group = true
 
 # assign-switch: when auto-group is enabled and the frontmost app is ungrouped,
-# assign it to the current group instead of falling back to group 1
+# permanently assign it to the current group
 assign-switch = true
+
+# assign-switch-group: after assigning an app to a group via group-assign hotkey,
+# switch to that group. No-op if the target group is already active.
+# assign-switch-group = true
 
 # switch-group-focus: focus the first window when switching groups via hotkey
 switch-group-focus = true
@@ -51,8 +55,10 @@ mouse-switch = true
 show-all-cross-group = true
 
 # group-hide-others: when switching groups, unhide all apps in the target group
-# and hide apps assigned to other groups. If the target group has no assigned
-# apps, only the group number is switched and no apps are hidden/unhidden.
+# and hide apps assigned to other groups. If the target group is already active,
+# has no assigned apps, has no running apps, or has running apps but no windows
+# (hidden windows count as windows), only the group number is switched and no
+# apps are hidden/unhidden.
 # group-hide-others = true
 
 # ============================================================

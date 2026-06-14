@@ -576,15 +576,12 @@ private func showPanel(backward: Bool = false) {
     let frontBid = frontmostBundleID()
 
     // Auto-switch to frontmost app's group.
-    // When assign-switch is also enabled, leave the current group unchanged for
-    // ungrouped apps so they can be assigned to the active group instead of
-    // being forced back to group 1.
+    // Ungrouped apps keep the current group; they are treated as part of the
+    // active group by the window filter.
     if activeConfig.autoGroup {
         if let frontBid = frontBid,
            let group = GroupManager.shared.getGroup(for: frontBid) {
             WindowsManager.shared.currentGroup = group
-        } else if !activeConfig.assignSwitch {
-            WindowsManager.shared.currentGroup = 1
         }
         MenuBarManager.shared.updateIcon(group: WindowsManager.shared.currentGroup)
     }
@@ -810,6 +807,22 @@ private func focusAXWindow(pid: pid_t, title: String?) {
 // ============================================================
 
 private func switchToGroup(_ group: Int) {
+    guard applyGroupSwitch(group) else { return }
+    if panelVisible {
+        showPanel()
+    }
+}
+
+/// Applies the core group-switch side effects (hide/unhide, focus) without
+/// refreshing the switcher panel. Returns false if the group is invalid or
+/// already active. Used by both group hotkeys and assign-to-group.
+@discardableResult
+private func applyGroupSwitch(_ group: Int) -> Bool {
+    guard (1...9).contains(group) else { return false }
+    // Switching to the already-active group is a no-op: avoid redundant
+    // hide/unhide operations and focus changes.
+    guard group != WindowsManager.shared.currentGroup else { return false }
+
     WindowsManager.shared.currentGroup = group
     MenuBarManager.shared.updateIcon(group: group)
 
@@ -818,12 +831,26 @@ private func switchToGroup(_ group: Int) {
         guard !targetApps.isEmpty else {
             // Empty target group: just switch the group, do nothing else.
             print("[MintTab] Group \(group) (empty)")
-            return
+            return true
+        }
+
+        let targetSet = Set(targetApps)
+        let ourPID = ProcessInfo.processInfo.processIdentifier
+
+        // If the target group has no running apps, or its running apps have no
+        // visible windows, just switch the group without hiding/unhiding.
+        let runningTargets = NSWorkspace.shared.runningApplications.filter {
+            $0.processIdentifier != ourPID &&
+            targetSet.contains($0.bundleIdentifier
+                ?? cliBundleIdentifier(forProcessName: $0.localizedName ?? ""))
+        }
+        if runningTargets.isEmpty ||
+           !runningTargets.contains(where: { hasAnyWindow(forPID: $0.processIdentifier) }) {
+            print("[MintTab] Group \(group) has no windows")
+            return true
         }
 
         // Unhide all apps in the target group.
-        let targetSet = Set(targetApps)
-        let ourPID = ProcessInfo.processInfo.processIdentifier
         for app in NSWorkspace.shared.runningApplications {
             guard app.processIdentifier != ourPID else { continue }
             let bid = app.bundleIdentifier
@@ -836,10 +863,6 @@ private func switchToGroup(_ group: Int) {
         hideAppsNotInGroup(group)
     }
 
-    if panelVisible {
-        showPanel()
-    }
-
     // Optionally focus first window in target group
     if activeConfig.switchGroupFocus {
         WindowsManager.shared.refresh()
@@ -849,6 +872,35 @@ private func switchToGroup(_ group: Int) {
     }
 
     print("[MintTab] Group \(group)")
+    return true
+}
+
+/// Returns true if the given process currently has at least one window,
+/// including hidden (Cmd+H / app.hide()) windows. Layer-0 windows with
+/// non-zero alpha/size are counted.
+private func hasAnyWindow(forPID pid: pid_t) -> Bool {
+    guard let windowList = CGWindowListCopyWindowInfo(
+        [.excludeDesktopElements],
+        kCGNullWindowID
+    ) as? [[CFString: Any]] else { return false }
+
+    for dict in windowList {
+        guard let ownerPID = dict[kCGWindowOwnerPID] as? pid_t,
+              ownerPID == pid,
+              let layer = dict[kCGWindowLayer] as? Int32, layer == 0
+        else { continue }
+
+        if let alpha = dict[kCGWindowAlpha] as? Double, alpha <= 0 { continue }
+        if let boundsDict = dict[kCGWindowBounds] as? [String: Any],
+           let width = boundsDict["Width"] as? Double,
+           let height = boundsDict["Height"] as? Double,
+           width <= 0 || height <= 0 {
+            continue
+        }
+
+        return true
+    }
+    return false
 }
 
 /// Hide running apps assigned to groups other than the target group.
@@ -895,9 +947,8 @@ private func assignAppToGroup(_ group: Int, identifier: String) {
     }
 
     GroupManager.shared.setGroup(group, for: bundleID)
-    if activeConfig.assignSwitch {
-        WindowsManager.shared.currentGroup = group
-        MenuBarManager.shared.updateIcon(group: group)
+    if activeConfig.assignSwitchGroup {
+        applyGroupSwitch(group)
     }
     print("[MintTab] \(bundleID) → Group \(group)")
 
@@ -925,9 +976,8 @@ private func assignCurrentAppToGroup(_ group: Int) {
     }
 
     GroupManager.shared.setGroup(group, for: bundleID)
-    if activeConfig.assignSwitch {
-        WindowsManager.shared.currentGroup = group
-        MenuBarManager.shared.updateIcon(group: group)
+    if activeConfig.assignSwitchGroup {
+        applyGroupSwitch(group)
     }
     print("[MintTab] \(bundleID) → Group \(group)")
 
@@ -1085,9 +1135,6 @@ private func executeCLICommand(_ parts: [String]) {
             assignAppToGroup(g, identifier: args[1])
         } else {
             assignCurrentAppToGroup(g)
-        }
-        if activeConfig.assignSwitch {
-            MenuBarManager.shared.updateIcon(group: g)
         }
     case "show-all":
         if !panelVisible { showAllPanel() }

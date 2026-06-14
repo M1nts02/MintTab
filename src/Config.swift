@@ -188,6 +188,7 @@ struct MintTabConfig {
     let mouseSwitch: Bool
     let showHidden: Bool
     let assignSwitch: Bool
+    let assignSwitchGroup: Bool
     let autoGroup: Bool
     let showAllCrossGroup: Bool
     let switchGroupFocus: Bool
@@ -208,6 +209,7 @@ struct MintTabConfig {
         mouseSwitch: true,
         showHidden: false,
         assignSwitch: false,
+        assignSwitchGroup: false,
         autoGroup: true,
         showAllCrossGroup: true,
         switchGroupFocus: false,
@@ -301,6 +303,7 @@ enum ConfigLoader {
         let mouseSwitch = kv["mouse-switch"] != "false"
         let showHidden = kv["show-hidden"] == "true"
         let assignSwitch = kv["assign-switch"] == "true"
+        let assignSwitchGroup = kv["assign-switch-group"] == "true"
         let autoGroup = kv["auto-group"] != "false"
         let showAllCrossGroup = kv["show-all-cross-group"] != "false"
         let switchGroupFocus = kv["switch-group-focus"] == "true"
@@ -340,6 +343,7 @@ enum ConfigLoader {
             mouseSwitch: mouseSwitch,
             showHidden: showHidden,
             assignSwitch: assignSwitch,
+            assignSwitchGroup: assignSwitchGroup,
             autoGroup: autoGroup,
             showAllCrossGroup: showAllCrossGroup,
             switchGroupFocus: switchGroupFocus,

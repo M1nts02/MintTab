@@ -82,7 +82,9 @@ See [config.example](config.example) for all available options. Copy it to `~/.c
 ### Notes
 
 - `show-all` displays **all** windows, including minimized/hidden ones.
-- When `group-hide-others = true`, switching to a group will **unhide all apps in that group** and hide apps assigned to other groups. If the target group has no assigned apps, only the active group number is changed and no apps are hidden/unhidden.
+- When `group-hide-others = true`, switching to a group will **unhide all apps in that group** and hide apps assigned to other groups. If the target group is already active, has no assigned apps, has no running apps, or has running apps but no windows (hidden windows count as windows), only the active group number is changed and no apps are hidden/unhidden.
+- Ungrouped apps behave as if they belong to the active group.
+- When `assign-switch-group = true`, assigning an app to a group via the group-assign hotkey also switches to that group. If the target group is already active, the assignment still happens but no group switch is performed.
 
 ### CLI
 

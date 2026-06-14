@@ -361,14 +361,11 @@ class WindowsManager {
         // Group filtering (skip when requested)
         if !ignoreGroupFilter, currentGroup > 0 {
             let groupBundleIDs = Set(GroupManager.shared.getAppsInGroup(currentGroup))
-            if currentGroup == 1 {
-                // Group 1 includes ungrouped apps
-                let allGroupedIDs = Set((1...9).flatMap { GroupManager.shared.getAppsInGroup($0) })
-                entries = entries.filter {
-                    groupBundleIDs.contains($0.bundleIdentifier) || !allGroupedIDs.contains($0.bundleIdentifier)
-                }
-            } else {
-                entries = entries.filter { groupBundleIDs.contains($0.bundleIdentifier) }
+            let allGroupedIDs = Set((1...9).flatMap { GroupManager.shared.getAppsInGroup($0) })
+            // The active group shows its assigned apps plus all ungrouped apps,
+            // so ungrouped apps behave as if they belong to the current group.
+            entries = entries.filter {
+                groupBundleIDs.contains($0.bundleIdentifier) || !allGroupedIDs.contains($0.bundleIdentifier)
             }
         }
 
