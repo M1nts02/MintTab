@@ -134,7 +134,7 @@ enum DirectionKeyAction {
 
 /// Resolve a key event to a direction action.
 /// - Switcher panel: arrow keys and switch-modifier + Vim keys (h/j/k/l).
-/// - Show-all panel: arrow keys, Ctrl+Emacs keys (n/p/f/b), and custom show-all-* keys.
+/// - Show-all panel: arrow keys, Vim keys (h/j/k/l), Tab / Shift-Tab, and Emacs keys (n/p/f/b with or without Ctrl).
 func directionAction(forCarbonKeyCode keyCode: UInt32, modifiers: UInt32, isShowingAll: Bool = false) -> DirectionKeyAction? {
     // Arrow keys work everywhere without modifiers, and in the switcher panel
     // they also work while holding the switch modifier (since the user is
@@ -150,13 +150,31 @@ func directionAction(forCarbonKeyCode keyCode: UInt32, modifiers: UInt32, isShow
     }
 
     if isShowingAll {
-        // Show-all panel: plain Vim direction keys.
+        // Show-all panel: plain Vim direction keys, Tab navigation, and Emacs keys.
         if modifiers == 0 {
             switch keyCode {
             case KeyCode.h: return .left
             case KeyCode.j: return .down
             case KeyCode.k: return .up
             case KeyCode.l: return .right
+            case KeyCode.n: return .down
+            case KeyCode.p: return .up
+            case KeyCode.f: return .right
+            case KeyCode.b: return .left
+            case KeyCode.tab: return .right
+            default: break
+            }
+        } else if modifiers == CarbonMod.shift {
+            switch keyCode {
+            case KeyCode.tab: return .left
+            default: break
+            }
+        } else if modifiers == CarbonMod.control {
+            switch keyCode {
+            case KeyCode.n: return .down
+            case KeyCode.p: return .up
+            case KeyCode.f: return .right
+            case KeyCode.b: return .left
             default: break
             }
         }
